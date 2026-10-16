@@ -369,24 +369,26 @@ flag, especially while it is unsigned and freshly built:
   wait for a signed release.
 - **Antivirus/EDR detections:** if your AV quarantines `PingTracer.exe`,
   verify the SHA-256 against the release, then allow/exclude the file or
-  folder. Each release artifact is additionally scanned by Microsoft Defender
-  in the build pipeline (see the release notes / CI job summary for the scan
-  result of the build you downloaded).
+  folder. Each release build is additionally scanned by Microsoft Defender in
+  the CI pipeline; the scan result for the build you downloaded is in that
+  release's CI job summary.
 - The native helpers (`pphelper.exe`, `pptray.exe`) are extracted into the
   data folder at first run; exclude that folder if a scanner is aggressive.
 
 ## Verifying your download (checksums & signing)
 
-Every release publishes `SHA256SUMS.txt` next to the zip. Verify after
-extracting (PowerShell):
+Every release publishes `SHA256SUMS.txt` next to the zip; the checksum covers
+the zip file itself. Verify **before extracting** (PowerShell):
 
 ```powershell
-Get-FileHash .\PingTracer.exe -Algorithm SHA256
-# or, for the whole file list:
-Get-Content .\SHA256SUMS.txt | ForEach-Object { $h,$f = -split $_,2; (Get-FileHash $f -Algorithm SHA256).Hash -eq $h }
+Get-FileHash .\PingTracer-windows-x64-portable.zip -Algorithm SHA256
+# compare the printed hash with the one in SHA256SUMS.txt
 ```
 
-(cmd.exe: `certutil -hashfile PingTracer.exe SHA256`)
+(cmd.exe: `certutil -hashfile PingTracer-windows-x64-portable.zip SHA256`)
+
+The zip contains a single `PingTracer` folder with `PingTracer.exe` and this
+README — extract it wherever you like.
 
 **Signing status, stated honestly:** v1.0.0 builds are published **unsigned**
 unless a code-signing certificate (Azure Trusted Signing) is configured for

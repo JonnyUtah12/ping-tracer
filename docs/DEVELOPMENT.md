@@ -125,15 +125,19 @@ added for v1.0.0). Pushing a `v*` tag runs, on `windows-latest`:
 2. compile the helpers with in-box `csc` and build the SEA exe (`build.ps1`,
    pinned postject);
 3. scan the final artifact with Microsoft Defender
-   (`MpCmdRun -Scan -ScanType 3 -File <exe>`); the result is written to the
-   job summary — an unexplained detection blocks publication;
+   (`MpCmdRun -Scan -ScanType 3 -File <exe> -DisableRemediation`); the raw
+   log and result are written to the job summary. Any detection must have a
+   matching entry (threat name + explanation) in
+   `packaging/defender-allowlist.json`, otherwise the release is blocked;
 4. optional code signing with Azure Trusted Signing when the signing
    variables/secrets are configured (the build is published unsigned
    otherwise — the README and release notes must say so honestly);
 5. smoke-test the frozen exe (start it, hit the API and static UI, add a
    target, export, quit);
-6. zip the portable folder, generate `SHA256SUMS.txt`, and publish a GitHub
-   Release with the zip, the checksums and this CHANGELOG as the notes.
+6. zip the portable folder (`PingTracer-windows-x64-portable.zip`, containing
+   a `PingTracer/` folder with the exe and README), generate
+   `SHA256SUMS.txt` (covering the zip), and publish a GitHub Release with
+   the zip, the checksums and this CHANGELOG as the notes.
 
 Releases are tagged `v*` (the current release line is `v1.0.0`) at
 <https://github.com/JonnyUtah12/ping-tracer/releases>.
