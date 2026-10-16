@@ -25,7 +25,7 @@ static class PPHelper
                 try
                 {
                     byte[] data = Convert.FromBase64String(p[2]);
-                    byte[] salt = System.Text.Encoding.UTF8.GetBytes("PongPlotter.v1");
+                    byte[] salt = System.Text.Encoding.UTF8.GetBytes("PingTracer.v1");
                     byte[] r = p[0] == "E" ? ProtectedData.Protect(data, salt, DataProtectionScope.CurrentUser) : ProtectedData.Unprotect(data, salt, DataProtectionScope.CurrentUser);
                     res = "S " + p[1] + " " + Convert.ToBase64String(r);
                 }

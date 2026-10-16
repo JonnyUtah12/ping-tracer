@@ -1,19 +1,19 @@
-# Builds dist\PongPlotter-Setup.exe with Windows' built-in IExpress (no extra tools). Run build.ps1 first.
+# Builds dist\PingTracer-Setup.exe with Windows' built-in IExpress (no extra tools). Run build.ps1 first.
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-$exe = Join-Path $PSScriptRoot 'dist\PongPlotter.exe'
-if (-not (Test-Path $exe)) { throw 'dist\PongPlotter.exe not found - run build.ps1 first' }
-$version = '1.4.0'
+$exe = Join-Path $PSScriptRoot 'dist\PingTracer.exe'
+if (-not (Test-Path $exe)) { throw 'dist\PingTracer.exe not found - run build.ps1 first' }
+$version = '1.0.0'
 $stage = Join-Path $env:TEMP 'pp-setup-stage'
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory $stage | Out-Null
 Copy-Item $exe $stage
 Copy-Item installer\install.ps1, installer\install.cmd, installer\uninstall.ps1, installer\uninstall.cmd $stage
 Set-Content (Join-Path $stage 'version.txt') $version
-$final = Join-Path $PSScriptRoot 'dist\PongPlotter-Setup.exe'
-$out = Join-Path $env:TEMP 'PongPlotter-Setup.exe'   # built at a space-free path (IExpress is picky), then copied
+$final = Join-Path $PSScriptRoot 'dist\PingTracer-Setup.exe'
+$out = Join-Path $env:TEMP 'PingTracer-Setup.exe'   # built at a space-free path (IExpress is picky), then copied
 if (Test-Path $out) { Remove-Item $out -Force }
-$files = 'PongPlotter.exe', 'install.ps1', 'install.cmd', 'uninstall.ps1', 'uninstall.cmd', 'version.txt'
+$files = 'PingTracer.exe', 'install.ps1', 'install.cmd', 'uninstall.ps1', 'uninstall.cmd', 'version.txt'
 $sed = @"
 [Version]
 Class=IEXPRESS
@@ -38,11 +38,11 @@ AdminQuietInstCmd=%AdminQuietInstCmd%
 UserQuietInstCmd=%UserQuietInstCmd%
 SourceFiles=SourceFiles
 [Strings]
-InstallPrompt=Install Pong Plotter $version for the current user?
+InstallPrompt=Install PingTracer $version for the current user?
 DisplayLicense=
 FinishMessage=
 TargetName=$out
-FriendlyName=Pong Plotter Setup
+FriendlyName=PingTracer Setup
 AppLaunched=install.cmd
 PostInstallCmd=<None>
 AdminQuietInstCmd=install.cmd

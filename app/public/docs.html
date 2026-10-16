@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pong Plotter API</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PingTracer API</title>
 <style>:root{--bg:#f4f6f8;--fg:#1d2733;--mut:#6b7785;--bd:#d9dfe6;--panel:#fff}@media(prefers-color-scheme:dark){:root{--bg:#14181d;--fg:#e3e8ee;--mut:#8b97a5;--bd:#2d3641;--panel:#1c222a}}
 body{margin:0;font:14px/1.5 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--fg)}main{max-width:900px;margin:0 auto;padding:20px 16px}
 table{border-collapse:collapse;width:100%;background:var(--panel)}td,th{border:1px solid var(--bd);padding:6px 10px;text-align:left;vertical-align:top}th{color:var(--mut)}code{font-family:Consolas,monospace}</style></head><body><main>
-<h1>Pong Plotter REST API</h1>
+<h1>PingTracer REST API</h1>
 <p>All endpoints are JSON unless noted. Local mode only accepts same-origin requests to a loopback host. In <code>--agent</code> mode every <code>/api</code> call needs the <code>x-pp-token</code> header (or <code>?token=</code>). <code>focus</code> is a statistics window in ms (0 = all).</p>
 <table><tr><th>Method &amp; path</th><th>Purpose</th></tr>
 <tr><td><code>GET /api/targets?focus=</code></td><td>All targets with per-hop statistics and extension columns</td></tr>

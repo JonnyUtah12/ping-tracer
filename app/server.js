@@ -1,4 +1,4 @@
-// PongPlotter-style traceroute monitor: engine + REST API + static UI. Zero dependencies.
+// Multi-target route tracer (ICMP/TCP/UDP): engine + REST API + static UI. Zero dependencies.
 const http = require('http'), fs = require('fs'), path = require('path'), dns = require('dns'), os = require('os');
 const { execFile, spawn } = require('child_process');
 let sea = null; try { sea = require('node:sea'); if (!sea.isSea()) sea = null; } catch { sea = null; }
@@ -15,7 +15,7 @@ const AGENT = argv.includes('--agent'); // remote-agent mode: listens on the net
 const AGENT_TOKEN = argOf('--token') || process.env.PP_TOKEN || require('crypto').randomBytes(12).toString('hex');
 const PORT = +argOf('--port') || +process.env.PORT || (AGENT ? 8766 : 8765);
 
-// ---- command-line automation: "PongPlotter.exe cli <command> ..." drives a running instance through its local API ----
+// ---- command-line automation: "PingTracer.exe cli <command> ..." drives a running instance through its local API ----
 if (argv[0] === 'cli') {
   const args = argv.slice(1), cmd = args[0], flags = {}, pos = [];
   for (let i = 1; i < args.length; i++) { if (args[i].startsWith('--')) { flags[args[i].slice(2)] = (args[i + 1] && !args[i + 1].startsWith('--')) ? args[++i] : true; } else pos.push(args[i]); }
@@ -24,10 +24,10 @@ if (argv[0] === 'cli') {
     const rq = http.request({ host: '127.0.0.1', port: PORT, path: p, method, headers: data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {}, timeout: 15000 }, r => {
       let d = ''; r.on('data', c => d += c); r.on('end', () => { let j = d; try { j = JSON.parse(d); } catch {} r.statusCode >= 400 ? reject(new Error((j && j.error) || 'HTTP ' + r.statusCode)) : resolve(j); });
     });
-    rq.on('error', e => reject(new Error('cannot reach Pong Plotter on port ' + PORT + ' (is it running?) – ' + e.message))); if (data) rq.write(data); rq.end();
+    rq.on('error', e => reject(new Error('cannot reach PingTracer on port ' + PORT + ' (is it running?) – ' + e.message))); if (data) rq.write(data); rq.end();
   });
   const out = v => console.log(typeof v === 'string' ? v : JSON.stringify(v, null, 2));
-  const HELP = `Pong Plotter command line (talks to the running instance)
+  const HELP = `PingTracer command line (talks to the running instance)
   cli status                       engine status
   cli list                         open targets
   cli start HOST [--proto tcp|udp --port N --config ID]
@@ -74,10 +74,10 @@ if (argv[0] === 'cli') {
   return; // never start the server in CLI mode
 }
 const BASE = sea ? path.dirname(process.execPath) : __dirname;
-// When installed by the setup program (installed.flag next to the exe) user data lives in %LOCALAPPDATA%\Pong Plotter so upgrades and
+// When installed by the setup program (installed.flag next to the exe) user data lives in %LOCALAPPDATA%\PingTracer so upgrades and
 // uninstalls never touch it; a portable exe keeps its data folder next to itself.
 const INSTALLED = !!sea && fs.existsSync(path.join(BASE, 'installed.flag'));
-const DATA_DIR = process.env.PP_DATA || (INSTALLED && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Pong Plotter', AGENT ? 'data-agent' : 'data') : path.join(BASE, AGENT ? 'data-agent' : 'data'));
+const DATA_DIR = process.env.PP_DATA || (INSTALLED && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'PingTracer', AGENT ? 'data-agent' : 'data') : path.join(BASE, AGENT ? 'data-agent' : 'data'));
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const WIN = os.platform() === 'win32';
 const BACKGROUND = argv.includes('--background'); // started by Windows at logon: stay in the tray, don't open a window
@@ -224,11 +224,11 @@ async function sendMail(subject, body) {
 // ---- start with Windows: per-user Run key (no admin needed). Only meaningful for the packaged exe. ----
 const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const regRun = args => new Promise(r => execFile('reg', args, { windowsHide: true, timeout: 10000 }, (e, so) => r({ ok: !e, out: String(so || '') })));
-async function autostartState() { if (!WIN || !sea) return false; const r = await regRun(['query', RUN_KEY, '/v', 'PongPlotter']); return r.ok && r.out.includes(process.execPath); }
+async function autostartState() { if (!WIN || !sea) return false; const r = await regRun(['query', RUN_KEY, '/v', 'PingTracer']); return r.ok && r.out.includes(process.execPath); }
 async function setAutostart(on) {
   if (!WIN) return 'only available on Windows';
-  if (!sea) return 'only available in the packaged PongPlotter.exe';
-  const r = on ? await regRun(['add', RUN_KEY, '/v', 'PongPlotter', '/t', 'REG_SZ', '/d', `"${process.execPath}" --background`, '/f']) : await regRun(['delete', RUN_KEY, '/v', 'PongPlotter', '/f']);
+  if (!sea) return 'only available in the packaged PingTracer.exe';
+  const r = on ? await regRun(['add', RUN_KEY, '/v', 'PingTracer', '/t', 'REG_SZ', '/d', `"${process.execPath}" --background`, '/f']) : await regRun(['delete', RUN_KEY, '/v', 'PingTracer', '/f']);
   return r.ok || !on ? null : 'could not write the Run registry key';
 }
 
@@ -275,7 +275,7 @@ function trayWrite(s) { try { tray && tray.stdin.write(s.replace(/[\r\n]+/g, ' '
 function updateTrayTip() {
   const running = targets.filter(t => t.running).length;
   const worst = targets.map(t => t.hops[t.hops.length - 1]).filter(Boolean).map(h => stats(h, 60000)).sort((a, b) => b.lossPct - a.lossPct)[0];
-  trayWrite(`tip Pong Plotter: ${running}/${targets.length} running` + (worst && worst.avg != null ? `, ${worst.avg.toFixed(0)}ms ${worst.lossPct.toFixed(0)}% loss` : ''));
+  trayWrite(`tip PingTracer: ${running}/${targets.length} running` + (worst && worst.avg != null ? `, ${worst.avg.toFixed(0)}ms ${worst.lossPct.toFixed(0)}% loss` : ''));
 }
 
 function helperProto(kind, host, port, timeoutMs, size) {
@@ -526,7 +526,7 @@ function checkAlerts(t) {
       alertLog.push(ev); if (alertLog.length > 500) alertLog.shift();
       if (rule.action === 'command' && rule.command) execFile(rule.command, [ev.message], { windowsHide: true }, () => {});
       if (settings.trayAlerts !== false) trayWrite('balloon ' + ev.message);
-      if (rule.action === 'email') sendMail('[Pong Plotter] ' + ev.message, `${ev.message}\n\nTime: ${new Date(ev.t).toISOString()}\nTarget: ${t.host}`).then(r => { if (!r.ok) alertLog.push({ t: Date.now(), rule: rule.id, target: t.host, message: 'email failed: ' + r.error, action: 'error' }); });
+      if (rule.action === 'email') sendMail('[PingTracer] ' + ev.message, `${ev.message}\n\nTime: ${new Date(ev.t).toISOString()}\nTarget: ${t.host}`).then(r => { if (!r.ok) alertLog.push({ t: Date.now(), rule: rule.id, target: t.host, message: 'email failed: ' + r.error, action: 'error' }); });
       if (rule.action === 'webhook' && /^https?:\/\//i.test(rule.command || '')) {
         try { const u = new URL(rule.command), d = JSON.stringify(ev); (u.protocol === 'https:' ? require('https') : http).request(u, { method: 'POST', timeout: 5000, headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(d) } }, r => r.resume()).on('error', () => {}).end(d); } catch {}
       }
@@ -663,7 +663,7 @@ function loadOui() {
 }
 const vendorOf = mac => { if (!oui) loadOui(); const hex = mac.replace(/[^0-9a-f]/gi, '').toUpperCase(); if (parseInt(hex.slice(0, 2), 16) & 2) return '(private / randomized address)'; return oui.get(hex.slice(0, 6)) || (oui.size ? '' : '(vendor database not installed)'); };
 function updateOui() { // user-initiated from Settings: fetch the public IEEE registry
-  return new Promise((resolve, reject) => require('https').get('https://standards-oui.ieee.org/oui/oui.csv', { timeout: 30000, headers: { 'user-agent': 'PongPlotter' } }, r => {
+  return new Promise((resolve, reject) => require('https').get('https://standards-oui.ieee.org/oui/oui.csv', { timeout: 30000, headers: { 'user-agent': 'PingTracer' } }, r => {
     if (r.statusCode !== 200) { r.resume(); return reject(new Error('IEEE returned HTTP ' + r.statusCode)); }
     const chunks = []; let n = 0; r.on('data', c => { n += c.length; if (n > 20e6) r.destroy(new Error('too large')); else chunks.push(c); });
     r.on('end', () => { const t = Buffer.concat(chunks).toString('utf8'); if (!/^Registry,Assignment/.test(t)) return reject(new Error('unexpected file format')); fs.writeFileSync(path.join(DATA_DIR, 'oui.csv'), t); loadOui(); resolve(oui.size); });
@@ -941,8 +941,8 @@ const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(Str
 const loginFails = new Map(); // per client address, so one attacker can't lock everyone else out
 const PAGE = (title, body) => `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font:15px system-ui,Segoe UI,sans-serif;max-width:380px;margin:14vh auto;padding:0 18px;color:#0f172a;background:#f3f5f8}h2{margin:0 0 4px}p.s{color:#64748b;margin:0 0 18px}input{width:100%;box-sizing:border-box;padding:9px 10px;margin:0 0 10px;border:1px solid #cbd5e1;border-radius:6px;font:inherit}button{padding:9px 16px;border:0;border-radius:6px;background:#2563eb;color:#fff;font:inherit;font-weight:600;cursor:pointer}.e{color:#dc2626}@media(prefers-color-scheme:dark){body{background:#0a0e14;color:#e5ecf6}input{background:#111827;color:#e5ecf6;border-color:#2c3a50}p.s{color:#8b9ab0}}</style><body>${body}`;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const LOGIN_PAGE = (msg) => PAGE('Pong Plotter sign in', `<h2>Pong Plotter</h2><p class=s>Sign in with your web user name and password, or leave the user name empty and enter the access token from Settings.</p><form method=post action=/login><input name=user placeholder="User name (empty for access token)" autocomplete=username autofocus><input name=password type=password placeholder="Password or access token" autocomplete=current-password><button>Sign in</button></form><p class=e>${esc(msg)}</p>`);
-const SHARE_PAGE = (id, msg) => PAGE('Pong Plotter LiveShare', `<h2>Pong Plotter LiveShare</h2><p class=s>This read-only link is protected by a password.</p><form method=post action="/share/${esc(id)}"><input name=password type=password placeholder=Password autofocus><button>Open</button></form><p class=e>${esc(msg)}</p>`);
+const LOGIN_PAGE = (msg) => PAGE('PingTracer sign in', `<h2>PingTracer</h2><p class=s>Sign in with your web user name and password, or leave the user name empty and enter the access token from Settings.</p><form method=post action=/login><input name=user placeholder="User name (empty for access token)" autocomplete=username autofocus><input name=password type=password placeholder="Password or access token" autocomplete=current-password><button>Sign in</button></form><p class=e>${esc(msg)}</p>`);
+const SHARE_PAGE = (id, msg) => PAGE('PingTracer LiveShare', `<h2>PingTracer LiveShare</h2><p class=s>This read-only link is protected by a password.</p><form method=post action="/share/${esc(id)}"><input name=password type=password placeholder=Password autofocus><button>Open</button></form><p class=e>${esc(msg)}</p>`);
 function readForm(req) { return new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 4096) req.destroy(); }); req.on('end', () => r(new URLSearchParams(d))); req.on('error', () => r(new URLSearchParams())); }); }
 function throttled(req) { // per-client failed-attempt limiter shared by sign-in and LiveShare passwords
   const ip = req.socket.remoteAddress || '?', now = Date.now();
@@ -1121,7 +1121,7 @@ const handle = async (req, res, remote = false) => {
       targets.push(t); start(t); save(); return send(res, 200, view(t, focus));
     }
     if (p === '/api/closed' && m === 'POST') { // UI page unloaded: if no UI request follows (i.e. not a reload), tell the user once that we keep running in the tray
-      if (tray && !settings.trayNoticeShown) setTimeout(() => {        if (Date.now() - lastApiHit > 3500 && !settings.trayNoticeShown) { settings.trayNoticeShown = true; save(); trayWrite('balloon Pong Plotter is still running in the system tray. Right-click the tray icon to open it again or quit.'); }
+      if (tray && !settings.trayNoticeShown) setTimeout(() => {        if (Date.now() - lastApiHit > 3500 && !settings.trayNoticeShown) { settings.trayNoticeShown = true; save(); trayWrite('balloon PingTracer is still running in the system tray. Right-click the tray icon to open it again or quit.'); }
       }, 4000);
       return send(res, 200, { ok: true });
     }
@@ -1272,10 +1272,10 @@ const handle = async (req, res, remote = false) => {
       const n = importSet(JSON.parse(fs.readFileSync(file, 'utf8'))); save(); return send(res, 200, { ok: true, imported: n });
     }
     // email: test message and "send report"
-    if (p === '/api/email/test' && m === 'POST') return send(res, 200, await sendMail('[Pong Plotter] test message', 'This is a test message from Pong Plotter.'));
+    if (p === '/api/email/test' && m === 'POST') return send(res, 200, await sendMail('[PingTracer] test message', 'This is a test message from PingTracer.'));
     if (p === '/api/email/report' && m === 'POST') {
       const b = await readBody(req), t = targets.find(x => x.id === +b.targetId); if (!t) return send(res, 404, { error: 'not found' });
-      return send(res, 200, await sendMail(`[Pong Plotter] report for ${t.host}`, `Pong Plotter report for ${t.host} (${t.ip})\nGenerated ${new Date().toISOString()}\n\n` + exportText(t, 'long', +b.focus || 0, false)));
+      return send(res, 200, await sendMail(`[PingTracer] report for ${t.host}`, `PingTracer report for ${t.host} (${t.ip})\nGenerated ${new Date().toISOString()}\n\n` + exportText(t, 'long', +b.focus || 0, false)));
     }
     // ---- configurations ----
     if (p === '/api/configs') {
@@ -1369,7 +1369,7 @@ const handle = async (req, res, remote = false) => {
       const win = +u.searchParams.get('window') || 3600000;
       return send(res, 200, { supported: WIN, enabled: !!wifi.timer, error: wifi.error, current: wifi.current, history: wifi.history.filter(h => h.t >= Date.now() - win), neighbors: wifi.neighbors });
     }
-    if (p === '/api/info') return send(res, 200, { engine: helperReady ? 'helper' : 'ping.exe', platform: os.platform(), version: '1.4.0', data: DATA_DIR, tray: !!tray, agent: AGENT });
+    if (p === '/api/info') return send(res, 200, { engine: helperReady ? 'helper' : 'ping.exe', platform: os.platform(), version: '1.0.0', data: DATA_DIR, tray: !!tray, agent: AGENT });
     if (p === '/api/dashboard') return send(res, 200, targets.map(t => { const h = t.hops[t.hops.length - 1]; return { id: t.id, host: t.host, running: !!t.running, hops: t.hops.length, final: h ? stats(h, focus) : null }; }));
     // static (embedded in the exe, or ./public in dev)
     const name = p === '/' ? 'index.html' : p.replace(/^\/+/, '');
@@ -1379,8 +1379,8 @@ const handle = async (req, res, remote = false) => {
   } catch (e) { send(res, 500, { error: remote ? 'internal error' : String(e.message || e) }); }
 };
 http.createServer((q, s) => handle(q, s, false)).listen(PORT, AGENT ? '0.0.0.0' : '127.0.0.1', () => {
-  console.log(AGENT ? `PongPlotter AGENT listening on 0.0.0.0:${PORT}\n  Agent token: ${AGENT_TOKEN}\n  (add this machine from a controller with URL http://<this-ip>:${PORT} and the token; traffic is plain HTTP, use a trusted network)`
-                    : `PongPlotter clone running at http://127.0.0.1:${PORT}`);
+  console.log(AGENT ? `PingTracer AGENT listening on 0.0.0.0:${PORT}\n  Agent token: ${AGENT_TOKEN}\n  (add this machine from a controller with URL http://<this-ip>:${PORT} and the token; traffic is plain HTTP, use a trusted network)`
+                    : `PingTracer running at http://127.0.0.1:${PORT}`);
   startHelper(); startTray(); loadExtensions(); openDb(); load(); migrateSecrets(); applyWeb(); if (settings.wifiMonitor && !AGENT) wifiStart();
   if (OPEN) openUi();
 }).on('error', e => { if (e.code === 'EADDRINUSE') { if (OPEN) { openUi(() => process.exit(0)); setTimeout(() => process.exit(0), 3000); } else { console.error('Port in use'); process.exit(1); } } });

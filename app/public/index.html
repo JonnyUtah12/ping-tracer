@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pong Plotter</title>
+<title>PingTracer</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Cpath d='M5 20h5l3-9 5 14 3-8 2 3h4' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
-/* ---- Pong Plotter UI: design tokens ---- */
+/* ---- PingTracer UI: design tokens ---- */
 :root{
   --bg:#f3f5f8;--panel:#ffffff;--panel2:#f8fafc;--fg:#0f172a;--mut:#64748b;--bd:#e2e8f0;--bd2:#cbd5e1;
   --acc:#2563eb;--acc-fg:#ffffff;--acc-soft:rgba(37,99,235,.10);--acc-line:rgba(37,99,235,.35);
@@ -162,7 +162,7 @@ dialog .row.foot{position:sticky;bottom:0;background:var(--panel);padding:14px 0
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <header class="appbar">
-  <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--acc)"/><path d="M5 20h5l3-9 5 14 3-8 2 3h4" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Pong Plotter<small id="verTag"></small></div>
+  <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--acc)"/><path d="M5 20h5l3-9 5 14 3-8 2 3h4" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>PingTracer<small id="verTag"></small></div>
   <div class="menu" id="fileMenu"><button>File</button><div>
     <button data-a="txt-stats">Export text (statistics)…</button>
     <button data-a="txt-long">Export all samples (long)…</button>
@@ -186,7 +186,7 @@ dialog .row.foot{position:sticky;bottom:0;background:var(--panel);padding:14px 0
     <button data-a="img">Save as image (PNG)…</button>
     <button data-a="img-clip">Copy as image</button>
     <hr>
-    <button data-a="quit">Quit Pong Plotter</button>
+    <button data-a="quit">Quit PingTracer</button>
   </div></div>
   <div class="menu"><button>View</button><div id="viewMenu">
     <button data-v="theme">Toggle light / dark</button>
@@ -250,7 +250,7 @@ dialog .row.foot{position:sticky;bottom:0;background:var(--panel);padding:14px 0
   <div class="row"><button id="addRule">+ Add rule</button><button id="saveRules" class="pri">Save</button><label class="mut"><input type="checkbox" id="snd" checked> Play sound</label><label class="mut">Default <select id="sndSel"></select></label><button id="sndTest">▶</button><label class="mut"><input type="checkbox" id="notif"> Desktop notifications</label><span class="sp"></span><button onclick="dAlerts.close()">Close</button></div>
   <h4>Recent alerts</h4><div id="alog" style="max-height:200px;overflow:auto" class="card"></div>
 </dialog>
-<dialog id="dAbout"><h3 style="margin-top:0">Pong Plotter</h3><p>Continuous traceroute &amp; ping monitor. Hops are discovered with TTL-limited ICMP echo requests. Probe engine: <b id="eng">?</b>. Data folder: <code id="ddir"></code></p><details><summary>Network interfaces</summary><div id="ifl" class="mut" style="max-height:160px;overflow:auto"></div></details><p></p><button onclick="dAbout.close()">Close</button></dialog>
+<dialog id="dAbout"><h3 style="margin-top:0">PingTracer</h3><p>Continuous traceroute &amp; ping monitor. Hops are discovered with TTL-limited ICMP echo requests. Probe engine: <b id="eng">?</b>. Data folder: <code id="ddir"></code></p><details><summary>Network interfaces</summary><div id="ifl" class="mut" style="max-height:160px;overflow:auto"></div></details><p></p><button onclick="dAbout.close()">Close</button></dialog>
 <dialog id="dGen" style="max-width:860px"><h3 id="gTitle" style="margin-top:0"></h3><div id="gBody"></div><div class="row"><span class="sp"></span><button onclick="dGen.close()">Close</button></div></dialog>
 <dialog id="dSet"><h3>Settings</h3>
   <h4 class="sect">Tracing</h4>
@@ -264,7 +264,7 @@ dialog .row.foot{position:sticky;bottom:0;background:var(--panel);padding:14px 0
   <div class="row"><label class="lw">Samples kept per hop (live view)</label><input id="s_ms" type="number" min="100"></div>
   <div class="row"><label class="lw">Keep history for (days)</label><input id="s_hd" type="number" min="1" max="3650"></div>
   <h4 class="sect">Application</h4>
-  <div class="row"><label class="lw">Open Pong Plotter in</label><select id="s_open"><option value="app">Its own app window</option><option value="browser">Default browser tab</option></select></div>
+  <div class="row"><label class="lw">Open PingTracer in</label><select id="s_open"><option value="app">Its own app window</option><option value="browser">Default browser tab</option></select></div>
   <div class="row"><label class="lw">Alert balloons from the tray icon</label><input id="s_tray" type="checkbox"></div>
   <div class="row"><label class="lw">Start with Windows</label><input id="s_start" type="checkbox"><span class="mut">starts hidden in the tray</span></div>
   <div id="webSec"><h4 class="sect">Web access (HTTPS)</h4>
@@ -627,7 +627,7 @@ function showExportRange(){
 // ---- per-target options: ad hoc vs kept, follow IP changes ----
 function showTargetOptions(){
   const t=curT();if(!t)return;const literal=/^\d{1,3}(\.\d{1,3}){3}$/.test(t.host)||t.host.includes(':');
-  showGen(`Target options – ${t.name||t.host}`,`<div class="row"><label class="lw">Data</label><select id="toP"><option value="local">Keep: saved, restored after restart, kept as a stored session when closed</option><option value="adhoc">Ad hoc: discarded when closed or when Pong Plotter exits</option></select></div>
+  showGen(`Target options – ${t.name||t.host}`,`<div class="row"><label class="lw">Data</label><select id="toP"><option value="local">Keep: saved, restored after restart, kept as a stored session when closed</option><option value="adhoc">Ad hoc: discarded when closed or when PingTracer exits</option></select></div>
    <div class="row"><label class="lw">Follow IP changes</label><input id="toF" type="checkbox" ${t.followIp?'checked':''} ${literal?'disabled':''}><span class="mut">${literal?'only for hostnames':'look the hostname up every 5 minutes and follow it to a new address'}</span></div>
    <div class="row foot"><span class="sp"></span><button id="toSave" class="pri">Save</button></div>`);
   $('#toP').value=t.adhoc?'adhoc':'local';
@@ -637,7 +637,7 @@ function showTargetOptions(){
 // ---- web users ----
 async function showUsers(){
   let l;try{l=await api('/api/webusers')}catch(e){return toast(e.message)}
-  showGen('Web users',`<p class="mut">People who open Pong Plotter from another device sign in with a user name and password. <b>Admin</b> users can change everything; <b>viewer</b> users can only look. The access token from Settings keeps working as an admin sign-in.</p>
+  showGen('Web users',`<p class="mut">People who open PingTracer from another device sign in with a user name and password. <b>Admin</b> users can change everything; <b>viewer</b> users can only look. The access token from Settings keeps working as an admin sign-in.</p>
    <div class="card">${l.map(x=>`<div class="alert row" style="display:flex"><b>${esc(x.name)}</b><span class="mut">${x.role}</span><span class="sp"></span><button data-pw="${esc(x.name)}">Set password</button><button data-role="${esc(x.name)}" data-to="${x.role==='admin'?'viewer':'admin'}">Make ${x.role==='admin'?'viewer':'admin'}</button><button data-del="${esc(x.name)}">Delete</button></div>`).join('')||'<div class="alert mut">No web users yet.</div>'}</div>
    <h4>Add a user</h4><div class="row"><input id="uN" placeholder="User name" autocomplete="off"><input id="uP" type="password" placeholder="Password (8+ characters)" autocomplete="new-password"><select id="uR"><option value="viewer">Viewer (read-only)</option><option value="admin">Admin</option></select><button id="uAdd" class="pri">Add</button></div>`);
   const go=async f=>{try{await f();showUsers()}catch(e){toast(e.message)}},enc=encodeURIComponent;
@@ -707,7 +707,7 @@ document.querySelectorAll('.menu button[data-a]').forEach(b=>b.onclick=async()=>
   else if(a==='workspaces')await showWorkspaces();
   else if(a==='range-exp')showExportRange();
   else if(a==='liveshare')await showShares();
-  else if(a==='quit'){if(confirm('Quit Pong Plotter? Monitoring will stop.')){await api('/api/quit',{b:{}}).catch(()=>{});document.body.innerHTML='<p style="padding:24px">Pong Plotter has exited. You can close this tab.</p>'}}
+  else if(a==='quit'){if(confirm('Quit PingTracer? Monitoring will stop.')){await api('/api/quit',{b:{}}).catch(()=>{});document.body.innerHTML='<p style="padding:24px">PingTracer has exited. You can close this tab.</p>'}}
   else if(a==='set-out')dl('sampleset.pp.json',JSON.stringify(await api('/api/sampleset')),'application/json');
   else if(a==='list-out')dl('targets.txt',await api('/api/targetlist'));
   else if(a==='set-in'||a==='list-in'){importKind=a;$('#file').click()}
@@ -715,7 +715,7 @@ document.querySelectorAll('.menu button[data-a]').forEach(b=>b.onclick=async()=>
   }catch(e){toast(e.message)}});
 function imgBlob(t){return new Promise(res=>{const cv=$('#tg'),o=document.createElement('canvas'),rows=t.hops.length,c=o.getContext('2d');
   o.width=Math.max(cv.width,900);o.height=cv.height+40+rows*18;c.fillStyle='#fff';c.fillRect(0,0,o.width,o.height);c.fillStyle='#000';c.font='13px monospace';
-  c.fillText(`Pong Plotter – ${t.host} (${t.ip}) ${new Date().toLocaleString()}`,8,16);
+  c.fillText(`PingTracer – ${t.host} (${t.ip}) ${new Date().toLocaleString()}`,8,16);
   t.hops.forEach((h,i)=>c.fillText(`${String(h.ttl).padStart(2)}  ${(h.ip||'*').padEnd(16)} ${(h.name||'').slice(0,28).padEnd(28)} avg ${f1(h.stats.avg)}  min ${f1(h.stats.min)}  max ${f1(h.stats.max)}  loss ${h.stats.lossPct.toFixed(1)}%`,8,36+i*18));
   c.fillStyle='#fff';c.fillRect(0,40+rows*18,cv.width,cv.height);c.drawImage(cv,0,40+rows*18);o.toBlob(res)})}
 // ---- View / Help menus, theme, columns ----
@@ -740,7 +740,7 @@ document.querySelectorAll('[data-v]').forEach(b=>b.onclick=()=>{const v=b.datase
   else if(v==='order'){const up=!LS.get('graphFirst',false);LS.set('graphFirst',up);applyOrder()}
   else if(v==='graph'){const g=$('#graphCard');g.dataset.off=g.dataset.off?'':'1';LS.set('hideGraph',!!g.dataset.off);renderTable()}});
 const HELP={
- start:['Getting started','<p><b>1.</b> Type a hostname or IP and press <b>Trace</b>. The route is discovered and every hop is pinged continuously.</p><p><b>2.</b> Click a hop to graph it; right-click to hide it; double-click a name to rename it. Use <b>Focus</b> to change the statistics window.</p><p><b>3.</b> <b>Alerts</b> can notify, run a program, call a webhook or send email. <b>File</b> has exports, saved sample sets and an email report. <b>Remote…</b> traces from another machine running <code>PongPlotter.exe --agent</code>.</p><p><b>4.</b> <b>Insights</b> explains where problems start and lists events. Drag across the graph to focus on a time range; ◀ ▶ move back and forth in time.</p>'],
+ start:['Getting started','<p><b>1.</b> Type a hostname or IP and press <b>Trace</b>. The route is discovered and every hop is pinged continuously.</p><p><b>2.</b> Click a hop to graph it; right-click to hide it; double-click a name to rename it. Use <b>Focus</b> to change the statistics window.</p><p><b>3.</b> <b>Alerts</b> can notify, run a program, call a webhook or send email. <b>File</b> has exports, saved sample sets and an email report. <b>Remote…</b> traces from another machine running <code>PingTracer.exe --agent</code>.</p><p><b>4.</b> <b>Insights</b> explains where problems start and lists events. Drag across the graph to focus on a time range; ◀ ▶ move back and forth in time.</p>'],
  keys:['Keyboard shortcuts','<p><b>/</b> focus the target box · <b>Space</b> pause / resume · <b>← →</b> switch target · <b>↑ ↓</b> select hop · <b>F11</b> full screen</p>']};
 document.querySelectorAll('[data-h]').forEach(b=>b.onclick=()=>{document.activeElement.blur();const h=b.dataset.h;if(h==='docs')return window.open('/docs.html','_blank');if(h==='guides')return showGuides();
   $('#hTitle').textContent=HELP[h][0];$('#hBody').innerHTML=HELP[h][1];$('#dHelp').showModal()});
@@ -837,7 +837,7 @@ function playSound(name){ // synthesized with Web Audio (no audio files)
   }catch{}}
 const beep=()=>playSound($('#sndSel')?.value||'beep');
 async function pollAlerts(){try{const l=await api('/api/alerts');const n=l.filter(a=>a.t>lastAlertT&&a.action!=='recovered');
-  if(lastAlertT&&n.length){if($('#snd').checked)playSound(n[n.length-1].sound||$('#sndSel').value);n.forEach(a=>{toast(a.message);if($('#notif').checked&&Notification.permission==='granted')new Notification('Pong Plotter',{body:a.message})})}
+  if(lastAlertT&&n.length){if($('#snd').checked)playSound(n[n.length-1].sound||$('#sndSel').value);n.forEach(a=>{toast(a.message);if($('#notif').checked&&Notification.permission==='granted')new Notification('PingTracer',{body:a.message})})}
   if(l.length)lastAlertT=l[l.length-1].t;else if(!lastAlertT)lastAlertT=Date.now();
   const recent=l.filter(a=>a.action!=='recovered'&&a.t>Date.now()-3600000).length;$('#abadge').textContent=recent?`(${recent})`:''}catch{}}
 addEventListener('pagehide',()=>{try{navigator.sendBeacon('/api/closed','')}catch{}});

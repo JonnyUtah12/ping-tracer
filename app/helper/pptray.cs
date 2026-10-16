@@ -25,9 +25,9 @@ static class PPTray
         int pid; if (args.Length > 0 && int.TryParse(args[0], out pid)) HideConsole(pid);
         outw = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
         Application.EnableVisualStyles();
-        icon = new NotifyIcon { Visible = true, Text = "Pong Plotter", Icon = MakeIcon() };
+        icon = new NotifyIcon { Visible = true, Text = "PingTracer", Icon = MakeIcon() };
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Open Pong Plotter", null, (s, e) => Send("open"));
+        menu.Items.Add("Open PingTracer", null, (s, e) => Send("open"));
         pauseItem = new ToolStripMenuItem("Pause all targets", null, (s, e) => { paused = !paused; pauseItem.Text = paused ? "Resume all targets" : "Pause all targets"; Send(paused ? "pause" : "resume"); });
         menu.Items.Add(pauseItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -50,7 +50,7 @@ static class PPTray
         {
             string l = line;
             if (l.StartsWith("tip ")) icon.Text = l.Substring(4).Length > 62 ? l.Substring(4, 62) : l.Substring(4);
-            else if (l.StartsWith("balloon ")) icon.ShowBalloonTip(5000, "Pong Plotter", l.Substring(8), ToolTipIcon.Warning);
+            else if (l.StartsWith("balloon ")) icon.ShowBalloonTip(5000, "PingTracer", l.Substring(8), ToolTipIcon.Warning);
         }
         Shutdown(); // server went away
     }
