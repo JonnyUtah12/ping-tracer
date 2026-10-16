@@ -1,0 +1,241 @@
+name: windows-release
+
+# Builds the Windows portable artifact on a real windows-latest runner:
+# node:test suite -> app/build.ps1 (in-box csc + SEA + pinned postject) ->
+# Defender scan of the final exe (release gate) -> optional Azure Trusted
+# Signing -> smoke test of the frozen exe -> zip + SHA256SUMS.txt ->
+# GitHub release on v* tags (zip + SHA256SUMS.txt + CHANGELOG.md).
+# This is the only supported source of PingTracer.exe.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  ZIP: PingTracer-windows-x64-portable.zip
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Zero-dependency suite (node:test built-in runner), PT-8.
+      - name: tests
+        shell: bash
+        run: node --test tests/
+
+      # Compiles helper/pphelper.exe + helper/pptray.exe with the .NET
+      # Framework csc that ships with Windows, then builds dist\PingTracer.exe
+      # (Node 22 runtime + server + UI + helpers embedded via postject,
+      # pinned in app/build.ps1).
+      - name: build SEA exe
+        run: powershell -ExecutionPolicy Bypass -File app\build.ps1
+
+      # Release gate: the final artifact must come back clean from Microsoft
+      # Defender. A detection blocks publication unless packaging/
+      # defender-allowlist.json carries an entry for that exact threat name
+      # with a written explanation (known false positive). Raw scanner output
+      # is attached to the job summary either way.
+      - name: Defender scan of final artifact (release gate)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $exe = (Resolve-Path 'app\dist\PingTracer.exe').Path
+          $sha = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
+          $mp  = Join-Path ${env:ProgramFiles} 'Windows Defender\MpCmdRun.exe'
+          "### Microsoft Defender scan of PingTracer.exe" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- artifact: ``app/dist/PingTracer.exe``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- sha256: ``$sha``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          if (-not (Test-Path $mp)) {
+            "::warning::MpCmdRun.exe not found on this runner - Defender scan skipped"
+            "- **result: scanner not present on runner, scan skipped**" | Add-Content $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          & $mp -SignatureUpdate *> $null   # best effort; stale defs still scan
+          & $mp -Scan -ScanType 3 -File $exe -DisableRemediation 2>&1 | Tee-Object -FilePath defender-scan.log | Out-Host
+          $code = $LASTEXITCODE
+          $log  = Get-Content defender-scan.log -Raw
+          $names = @([regex]::Matches($log, '(?im)threat\s+name:\s*(.+)$') |
+                     ForEach-Object { $_.Groups[1].Value.Trim() } | Select-Object -Unique)
+          "- scan exit code: ``$code``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          if ($code -ne 0 -and $code -ne 2) {
+            "``````" | Add-Content $env:GITHUB_STEP_SUMMARY
+            $log | Add-Content $env:GITHUB_STEP_SUMMARY
+            "``````" | Add-Content $env:GITHUB_STEP_SUMMARY
+            Write-Host "::error::MpCmdRun failed with exit code $code - see job summary for the raw log"
+            exit 1
+          }
+          if ($code -eq 0 -and $names.Count -eq 0) {
+            "- **result: no threats detected**" | Add-Content $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          # Detection: gate against the allowlist (name + explanation required).
+          $allow = @()
+          if (Test-Path 'packaging\defender-allowlist.json') {
+            $allow = @(Get-Content 'packaging\defender-allowlist.json' -Raw | ConvertFrom-Json).accepted
+          }
+          $unexplained = @()
+          foreach ($n in $names) {
+            $hit = $allow | Where-Object { $_.name -ieq $n }
+            if ($hit -and $hit.explanation) {
+              "- accepted known detection: ``$n`` - $($hit.explanation)" | Add-Content $env:GITHUB_STEP_SUMMARY
+            } else {
+              $unexplained += $n
+            }
+          }
+          if ($unexplained.Count -gt 0) {
+            "- **result: UNEXPLAINED detection(s): $($unexplained -join ', ') - publication blocked**" | Add-Content $env:GITHUB_STEP_SUMMARY
+            "``````" | Add-Content $env:GITHUB_STEP_SUMMARY
+            $log | Add-Content $env:GITHUB_STEP_SUMMARY
+            "``````" | Add-Content $env:GITHUB_STEP_SUMMARY
+            Write-Host "::error::Defender detected $($unexplained -join ', ') with no entry in packaging/defender-allowlist.json"
+            exit 1
+          }
+          "- **result: detections all explained in defender-allowlist.json**" | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      # Optional code signing via Azure Trusted Signing - same vars/secrets
+      # gate as pingTracev2. Enable by creating repo variables
+      # TRUSTED_SIGNING_ENDPOINT, TRUSTED_SIGNING_ACCOUNT_NAME,
+      # TRUSTED_SIGNING_CERT_PROFILE and secrets AZURE_TENANT_ID /
+      # AZURE_CLIENT_ID / AZURE_CLIENT_SECRET. Skipped entirely when
+      # unconfigured. Runs before the zip so the shipped exe is the signed one.
+      - name: code sign PingTracer.exe (only when signing is configured)
+        if: vars.TRUSTED_SIGNING_ACCOUNT_NAME != ''
+        uses: Azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_CERT_PROFILE }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          files: app/dist/PingTracer.exe
+          description: PingTracer
+          description-url: https://github.com/JonnyUtah12/ping-tracer
+
+      # Smoke-test the frozen exe exactly as an end user runs it (double-click
+      # == start the exe): API up, static UI served, add a target, export it
+      # (JSON carries the export metadata block), quit releases the port.
+      # ICMP is blocked on GitHub Windows runners, so hop *content* is not
+      # asserted - the target view and export envelope must still be valid.
+      - name: smoke test frozen exe
+        shell: bash
+        run: |
+          set -e
+          export PP_NO_OPEN=1 PP_DATA="$RUNNER_TEMP/ppdata"
+          mkdir -p "$PP_DATA"
+          ./app/dist/PingTracer.exe --port=8765 &
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8765/api/info >/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          [ "$ok" = 1 ] || { echo "FAIL: /api/info never answered"; exit 1; }
+          info=$(curl -sf http://127.0.0.1:8765/api/info)
+          echo "api/info: $info"
+          ver=$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$info")
+          echo "exe version: $ver"
+          # On an exact release tag the exe's own version must match the tag.
+          if [[ "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            [ "$ver" = "${BASH_REMATCH[1]}" ] || { echo "FAIL: exe version $ver != tag $GITHUB_REF_NAME"; exit 1; }
+          fi
+          curl -sf -o /dev/null -w "GET / -> %{http_code}\n" http://127.0.0.1:8765/
+          curl -sf -o /dev/null -w "GET /docs.html -> %{http_code}\n" http://127.0.0.1:8765/docs.html
+          added=$(curl -sf -X POST -H 'content-type: application/json' \
+            -d '{"host":"127.0.0.1"}' http://127.0.0.1:8765/api/targets)
+          id=$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).id))' "$added")
+          echo "added target id=$id"
+          sleep 5
+          tj=$(curl -sf "http://127.0.0.1:8765/api/targets/$id")
+          node -e 'const t=JSON.parse(process.argv[1]); if(t.id==null||t.host!=="127.0.0.1"){console.error("bad target view:",t);process.exit(1)}' "$tj"
+          ex=$(curl -sf "http://127.0.0.1:8765/api/targets/$id/export?all=1&format=json")
+          node -e 'const e=JSON.parse(process.argv[1]); if(e.app!=="PingTracer"||!e.version||!e.exported){console.error("export metadata missing:",e);process.exit(1)}' "$ex"
+          curl -sf -o /dev/null -w "csv export -> %{http_code}\n" "http://127.0.0.1:8765/api/targets/$id/export?all=1&format=csv"
+          curl -sf -X POST http://127.0.0.1:8765/api/quit >/dev/null
+          gone=0
+          for i in $(seq 1 15); do
+            if ! curl -sf http://127.0.0.1:8765/api/info >/dev/null; then gone=1; break; fi
+            sleep 1
+          done
+          [ "$gone" = 1 ] || { echo "FAIL: still answering after /api/quit"; exit 1; }
+          taskkill //IM PingTracer.exe //F >/dev/null 2>&1 || true
+          taskkill //IM pptray.exe //F >/dev/null 2>&1 || true
+          echo "smoke test OK: API + static + add/export + quit"
+
+      # Portable folder = one folder with the exe (double-click to run);
+      # README ships inside it when present. Git Bash has no `zip` on Windows
+      # runners, so Compress-Archive is used (-Path <dir> puts the folder at
+      # the zip root). SHA256SUMS.txt covers the shipped zip and is verified
+      # before upload.
+      - name: zip portable folder + SHA256SUMS
+        shell: bash
+        run: |
+          set -e
+          rm -rf package && mkdir -p package/PingTracer
+          cp app/dist/PingTracer.exe package/PingTracer/
+          [ -f README.md ] && cp README.md package/PingTracer/ || true
+          powershell -NoProfile -Command "Compress-Archive -Path package/PingTracer -DestinationPath '$ZIP' -Force"
+          sha256sum "$ZIP" > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          ls -l "$ZIP"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PingTracer-windows-x64-portable
+          path: |
+            PingTracer-windows-x64-portable.zip
+            SHA256SUMS.txt
+
+      # v* tags only: publish the release with zip + SHA256SUMS.txt +
+      # CHANGELOG.md. The release body reuses the matching CHANGELOG section
+      # when one exists. Publication requires a CHANGELOG (PT-11) and a
+      # green Defender gate above.
+      - name: publish release (v* tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -e
+          [ -f CHANGELOG.md ] || { echo "FAIL: CHANGELOG.md missing - releases must carry it"; exit 1; }
+          ver="${GITHUB_REF_NAME#v}"
+          node -e '
+            const fs = require("fs");
+            const lines = fs.readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
+            const ver = process.argv[1];
+            let out = [], hit = false;
+            for (const l of lines) {
+              if (/^## /.test(l)) { if (hit) break; if (l.includes("[" + ver + "]") || l.includes("[v" + ver + "]")) hit = true; continue; }
+              if (hit) out.push(l);
+            }
+            fs.writeFileSync("release-notes.md", out.join("\n").trim());
+          ' "$ver"
+          {
+            echo "Portable multi-target ping plotter for Windows 10/11 x64. Extract the zip, double-click PingTracer.exe. No installer, no admin rights, no Node."
+            echo
+            if [ -s release-notes.md ]; then cat release-notes.md; else echo "See CHANGELOG.md (attached) for the full change list."; fi
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" "$ZIP" SHA256SUMS.txt CHANGELOG.md \
+            --title "PingTracer $GITHUB_REF_NAME (Windows portable)" \
+            --notes-file notes.md
+          echo "release assets:"
+          gh release view "$GITHUB_REF_NAME"
