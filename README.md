@@ -300,7 +300,7 @@ PingTracer is local-first. Here is **every** network activity it can perform:
 **Always (because it is a tracer):**
 - DNS lookups for the hostnames you enter, and reverse DNS for hop addresses.
 - ICMP echo probes — and/or TTL-limited TCP/UDP probes to the ports you
-  choose — to the targets you add. LAN discovery pings your own subnet.
+  choose — to the targets you add.
 
 **Listens (loopback only, unless you enable more):**
 - `127.0.0.1:8765` — the local GUI/API. It only accepts same-origin requests
@@ -311,6 +311,8 @@ PingTracer is local-first. Here is **every** network activity it can perform:
   token; traffic is plain HTTP, use it on a network you trust.
 
 **Only if you turn the feature on:**
+- LAN device discovery (you click *Scan*): a ping sweep of your own subnet,
+  ARP, reverse DNS, and SSDP/mDNS discovery packets (local subnet only).
 - SMTP connections for alert emails / reports.
 - Webhook POSTs from alert rules.
 - One download of the public IEEE MAC-vendor list (≈6 MB) when you click
@@ -338,9 +340,8 @@ No telemetry, no phone-home, no cloud account, no update-checker.
 ## Security & privacy
 
 - **Zero npm dependencies.** The app is plain Node.js built-ins plus two small
-  C# helpers compiled from source in this repo. The Node.js runtime is bundled
-  into the exe (Node's Apache-2.0 license applies to it); the helpers use the
-  in-box .NET Framework. No packers, no obfuscation, no hidden payloads.
+  C# helpers compiled from source in this repo. No packers, no obfuscation,
+  no hidden payloads. The full dependency chain is below.
 - All your data stays on your machine (see
   [History](#history-and-where-your-data-lives)).
 - The local API rejects cross-site requests and non-loopback Host headers
@@ -353,6 +354,29 @@ No telemetry, no phone-home, no cloud account, no update-checker.
   Windows account) and is never sent back to the browser.
 - Extensions (`data/extensions/*.js`) run in a restricted sandbox without
   `require`/`process`/`fs` — but only install extensions you trust.
+- **No security bypasses anywhere in the code:** no TLS-certificate overrides
+  (no `rejectUnauthorized: false`, no `NODE_TLS_REJECT_UNAUTHORIZED`), the
+  optional web server enforces TLS 1.2+, tokens are compared in constant
+  time, and nothing listens on the network unless you enable Web access or
+  agent mode.
+
+### What's inside the download (dependencies)
+
+| Component | Where it comes from | License | Shipped? |
+|---|---|---|---|
+| Node.js 22 runtime | Embedded into `PingTracer.exe` by Node's official Single Executable Applications mechanism (pinned to Node 22 in the release workflow) | MIT — Node's own `LICENSE` also covers its bundled third-party parts (OpenSSL Apache-2.0, V8 BSD, SQLite public domain, ICU Unicode terms) | Yes, inside the exe |
+| PingTracer app code | This repository (`app/server.js`, `app/public/*`) | source in this repo (no LICENSE file yet) | Yes, inside the exe |
+| `pphelper.exe`, `pptray.exe` | C# source in this repo, compiled at build time with the `csc.exe` that ships inside Windows | source in this repo (no LICENSE file yet) | Yes, embedded and extracted to the data folder on first run |
+| .NET Framework 4.x | Already part of Windows 11 / Server 2022 — the helpers run on the in-box framework | Microsoft (in-box OS component) | Nothing to install or ship |
+| postject 1.0.0-alpha.6 | Build-time tool only, pinned and fetched via `npx` during the build; it injects the app blob into the exe | MIT | No — not part of the shipped artifact |
+
+There is no `package.json` and no `node_modules` anywhere in this project:
+`server.js` only `require`s Node built-ins (`http`, `https`, `net`, `dgram`,
+`dns`, `fs`, `path`, `os`, `crypto`, `vm`, `zlib`, `child_process`,
+`node:sea`, `node:sqlite`). The test suite uses the built-in `node:test`
+runner. The "self-contained exe" is Node's standard SEA packaging of this
+repo's own source — the only thing embedded is the app itself, which is why
+antivirus heuristics sometimes react to it (see next section).
 
 ## Antivirus false positives & SmartScreen
 
@@ -369,9 +393,11 @@ flag, especially while it is unsigned and freshly built:
   wait for a signed release.
 - **Antivirus/EDR detections:** if your AV quarantines `PingTracer.exe`,
   verify the SHA-256 against the release, then allow/exclude the file or
-  folder. Each release build is additionally scanned by Microsoft Defender in
-  the CI pipeline; the scan result for the build you downloaded is in that
-  release's CI job summary.
+  folder. You can also submit the file to a multi-engine scanner such as
+  VirusTotal before running it. Each release build is additionally scanned
+  by Microsoft Defender in the CI pipeline, and an unexplained detection
+  *blocks publication* — the scan result for the build you downloaded is in
+  that release's CI job summary.
 - The native helpers (`pphelper.exe`, `pptray.exe`) are extracted into the
   data folder at first run; exclude that folder if a scanner is aggressive.
 
@@ -391,11 +417,14 @@ The zip contains a single `PingTracer` folder with `PingTracer.exe` and this
 README — extract it wherever you like.
 
 **Signing status, stated honestly:** v1.0.0 builds are published **unsigned**
-unless a code-signing certificate (Azure Trusted Signing) is configured for
-the release pipeline; when signing is enabled it will be announced in the
-release notes. Until then the SHA-256 checksums are the integrity guarantee —
-compare them over a channel you trust (the release page) before running the
-exe.
+— no code-signing certificate is configured for this repository yet. The
+release pipeline already supports [Azure Trusted
+Signing](https://learn.microsoft.com/azure/trusted-signing/) (via
+`Azure/artifact-signing-action`); it activates automatically once the
+signing account variables and Azure credentials are set up, and signing
+will then be announced in the release notes. Until then the SHA-256
+checksums are the integrity guarantee — compare them over a channel you
+trust (the release page) before running the exe.
 
 ## Command line
 
