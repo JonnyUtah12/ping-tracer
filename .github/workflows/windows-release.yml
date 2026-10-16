@@ -48,7 +48,10 @@ jobs:
         run: |
           [ -n "$(find tests -name '*.test.js' -print -quit 2>/dev/null)" ] || \
             { echo "FAIL: no *.test.js files under tests/ - the suite must exist"; exit 1; }
-          node --test "tests/**/*.test.js"
+          # --test-concurrency=1: the integration tests each boot a server and
+          # bind ports; parallel file execution on shared runners produced a
+          # timing flake (JSON export test, run 38881098050). Serialize files.
+          node --test --test-concurrency=1 "tests/**/*.test.js"
 
       # Compiles helper/pphelper.exe + helper/pptray.exe with the .NET
       # Framework csc that ships with Windows, then builds dist\PingTracer.exe
