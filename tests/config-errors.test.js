@@ -169,6 +169,24 @@ test('unwritable data dir falls back instead of crashing', async () => {
   assert.equal(s.status, 200);
 });
 
+// ---- CLI front-end validates the port locally before calling the API ----
+test('cli start rejects an invalid --port with a clear error', async () => {
+  const { port } = await boot(scratch('cli-port'));
+  const run = (args) => new Promise(r => {
+    const p = spawn(process.execPath, [SERVER, 'cli', ...args, '--port=' + port], { env: { ...process.env, PP_NO_OPEN: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = ''; p.stdout.on('data', d => out += d); p.stderr.on('data', d => err += d);
+    p.on('exit', c => r({ code: c, out, err }));
+  });
+  const bad = await run(['start', '127.0.0.1', '--proto', 'tcp', '--port', 'abc']);
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /--port must be a whole number/);
+  const good = await run(['start', '127.0.0.1', '--proto', 'tcp', '--port', '80']);
+  assert.equal(good.code, 0);
+  const t = await req(port, 'GET', '/api/targets');
+  const tcp = t.body.find(x => x.proto === 'tcp');
+  assert.ok(tcp && tcp.port === 80);
+});
+
 // ---- settings written back are valid: a save after clamping persists the clamped values ----
 test('clamped settings persist to state.json (round-trip)', async () => {
   const dir = scratch('roundtrip');

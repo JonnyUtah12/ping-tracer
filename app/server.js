@@ -48,7 +48,7 @@ if (argv[0] === 'cli') {
     switch (cmd) {
       case 'status': out(await call('GET', '/api/info')); break;
       case 'list': out((await call('GET', '/api/targets')).map(t => ({ id: t.id, host: t.host, running: t.running, hops: t.hops.length, proto: t.proto }))); break;
-      case 'start': out(await call('POST', '/api/targets', { host: pos[0], proto: flags.proto, port: flags.port && +flags.port, configId: flags.config })); break;
+      case 'start': { const pt = flags.port === undefined ? undefined : +flags.port; if (pt !== undefined && !(Number.isInteger(pt) && pt >= 1 && pt <= 65535)) { console.error('error: --port must be a whole number between 1 and 65535'); process.exit(1); } out(await call('POST', '/api/targets', { host: pos[0], proto: flags.proto, port: pt, configId: flags.config })); break; }
       case 'get': { const t = await call('GET', '/api/targets/' + pos[0] + '?focus=' + (flags.focus || 600000)); out({ id: t.id, host: t.host, running: t.running, finalHop: t.hops[t.hops.length - 1] }); break; }
       case 'stats': { const t = await call('GET', '/api/targets/' + pos[0] + '?focus=' + (flags.focus || 600000)); console.log('hop ip name avg min max cur loss% jitter'.split(' ').join('\t')); t.hops.forEach(h => console.log([h.ttl, h.ip || '*', h.name || '', ...['avg', 'min', 'max', 'cur'].map(k => h.stats[k] == null ? '' : h.stats[k].toFixed(1)), h.stats.lossPct.toFixed(1), h.stats.jitter == null ? '' : h.stats.jitter.toFixed(1)].join('\t'))); break; }
       case 'timeline': out(await call('GET', '/api/targets/' + pos[0] + '/samples?hop=' + (flags.hop || '') + '&window=' + (flags.window || 600000))); break;
