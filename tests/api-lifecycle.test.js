@@ -63,14 +63,15 @@ test('add 127.0.0.1 target and poll until the loopback path is discovered', asyn
   tid = add.body.id;
   assert.equal(add.body.running, true);
   assert.equal(add.body.proto, 'icmp');
-  // the first round sweeps TTLs 1..maxHops; loopback answers at every TTL, so finalTtl must settle at 1
+  // the first round sweeps TTLs 1..maxHops; loopback answers at every TTL, so finalTtl must settle at 1.
+  // Wait for a recorded sample, not just an IP: runRound sets the hop IP before its sample lands (rdns await).
   let t = null;
   for (let i = 0; i < 30; i++) {
     t = (await req('GET', '/api/targets/' + tid)).body;
-    if (t.hops.some(h => h.ip)) break;
+    if (t.hops.some(h => h.ip && h.stats.count >= 1)) break;
     await new Promise(r => setTimeout(r, 1000));
   }
-  live = t.hops.some(h => h.ip);
+  live = t.hops.some(h => h.ip && h.stats.count >= 1);
   if (!live) {
     if (process.platform === 'win32') { console.warn('PT8: no ICMP replies from the loopback target on this Windows runner; skipping live-hop asserts'); return; }
     assert.ok(live, 'loopback ICMP must answer on Linux/macOS runners');

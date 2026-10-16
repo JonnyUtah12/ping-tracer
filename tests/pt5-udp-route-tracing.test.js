@@ -47,8 +47,11 @@ test('UDP target: path length discovered via port-unreachable; steady state prob
     const t0 = await api(port, 'POST', '/api/targets', { host: '192.0.2.1', proto: 'udp', port: 9999 });
     const get = () => api(port, 'GET', `/api/targets/${t0.id}?focus=60000`);
 
-    // 1) path length: the UDP probe itself finds it (ICMP never answers at the destination)
-    const t = await waitFor(async () => { const x = await get(); return x.finalTtl === 3 ? x : null; }, 15000, 'finalTtl 3 via UDP port-unreachable');
+    // 1) path length: the UDP probe itself finds it (ICMP never answers at the destination).
+    // Wait for the destination sample too, not just finalTtl: runRound sets finalTtl before the hop's
+    // sample is recorded (the rdns await for the destination IP sits between the two), so polling on
+    // finalTtl alone can observe the hop table one await early.
+    const t = await waitFor(async () => { const x = await get(); return x.finalTtl === 3 && x.hops[2] && x.hops[2].stats.count >= 1 ? x : null; }, 15000, 'finalTtl 3 via UDP port-unreachable, destination sample recorded');
     assert.strictEqual(t.proto, 'udp');
     assert.deepStrictEqual(t.hops.map(h => h.ttl), [1, 2, 3], 'hops beyond the discovered final TTL are dropped');
     assert.strictEqual(t.hops[0].ip, '198.51.100.1'); // intermediate hops attributed via ICMP (Windows socket limitation, documented)
