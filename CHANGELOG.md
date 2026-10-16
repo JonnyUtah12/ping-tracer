@@ -1,0 +1,80 @@
+# Changelog
+
+All notable changes to PingTracer are documented here.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
+this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.0.0] - 2026-10-16
+
+First PingTracer release — a rebrand and completion of the "Pong Plotter"
+prototype into a portable Windows network monitor. Single-file portable exe
+(Node SEA) with an embedded UI and native probe helper; zero npm dependencies;
+no administrator rights and no installed runtime required.
+
+### Added
+
+- **Continuous multi-target route tracing** — up to 64 targets, per-target
+  timers, probe spacing to avoid ICMP rate-limit artifacts, per-target
+  start/stop/reset/re-trace plus Start all / Stop all.
+- **Probe methods** — ICMP echo per hop; TTL-limited **TCP** and **UDP** route
+  tracing (protocol probes discover the path length; destination state
+  reported as open / refused / filtered / unreachable; intermediate hop
+  addresses attributed via ICMP, documented limitation).
+- **Native probe helper** (`pphelper.exe`, C#/.NET Framework, embedded in the
+  exe): real RTTs for TTL-expired replies, TTL control for TCP/UDP probes,
+  DPAPI secret protection, SMTP sending; automatic fallback to system `ping`.
+- **Live UI** — hop table (avg/min/max/cur latency, loss %, lost count,
+  jitter, MOS, sample count), per-hop time graph with overlay, graph panning
+  and drag-to-select focus ranges, overview table/tiles for all targets,
+  sortable columns, hide/rename hops, custom columns, timeline comments.
+- **Statistics engine** — focus windows and fixed historical ranges backed by a
+  local SQLite history database (retention 1–3650 days, default 30),
+  allocation-free cached aggregation, E-model MOS estimate.
+- **Route-change detection** with full history, diff-highlighted Routes view
+  and graph markers.
+- **Insights** — automatic diagnosis (where loss/latency begins, intermediate
+  hop rate-limiting, jitter, route changes), event detection with sensitivity
+  control, best/worst period ranking.
+- **Alerts** — threshold rules (avg/loss/jitter/MOS, per hop or final,
+  rolling window) with notify+sound, run-program, webhook and email actions,
+  recovery events, alert log.
+- **Exports** — statistics text, raw samples (long/wide/CSV), structured JSON
+  results with target/config metadata, time-range export (raw samples or
+  per-period aggregates, CSV/TSV), PNG snapshot, sample sets (`.pp.json`),
+  target lists, workspaces.
+- **Configuration** — settings with hard validation ranges, named trace
+  configurations per target/summary, IP version preference, history retention,
+  app-window vs browser mode, tray alerts, Start with Windows (HKCU Run).
+- **Data handling** — portable data folder next to the exe (installed mode uses
+  `%LOCALAPPDATA%\PingTracer`), graceful fallback when the data folder is not
+  writable, stored sessions for closed targets, workspaces, corrupt-state
+  recovery.
+- **Remote agents** (`--agent`, token-protected) and **Remote…** targets traced
+  through another instance; incremental sample feed.
+- **Web access (HTTPS)** — optional network GUI with self-signed certificate,
+  access token, named admin/viewer users, read-only LiveShare links with
+  optional password/expiry, CSRF/DNS-rebinding protection, login throttling.
+- **Wi-Fi monitoring** (signal/channel history, nearby networks via `netsh`)
+  and **LAN device discovery** (ping sweep, ARP, rDNS, SSDP/mDNS, IEEE OUI
+  vendor lookup).
+- **Interpretation guides** in-app (editable on disk) and built-in REST API
+  reference; **command-line automation** (`PingTracer.exe cli …`).
+- **System tray integration** (hide console, balloons, Open/Pause/Quit menu).
+- **Per-user installer** (`PingTracer-Setup.exe`, IExpress; no admin; migrates
+  data from the legacy "Ping Plotter"/"Pong Plotter" names).
+- **Automated tests** (`node --test`, zero dependencies: unit + API
+  integration, Linux and Windows).
+- **Release pipeline** — GitHub Actions on Windows: tests, SEA build, Defender
+  artifact scan, optional Trusted Signing, smoke test, portable zip,
+  `SHA256SUMS.txt`, GitHub Release on `v*` tags.
+- Documentation: README (end-user), docs/DEVELOPMENT.md (developer), this
+  changelog.
+
+### Notes
+
+- v1.0.0 artifacts are published **unsigned** unless a code-signing
+  certificate is configured for the pipeline; verify `SHA256SUMS.txt` after
+  download.
+- The product was previously developed as "Pong Plotter"; 1.0.0 is the first
+  version under the PingTracer name, and its version string, git tag and
+  installer version are aligned.
