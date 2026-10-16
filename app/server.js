@@ -36,7 +36,7 @@ if (argv[0] === 'cli') {
   cli stats ID [--focus MS]        statistics for every hop
   cli timeline ID [--hop N --window MS]
   cli pause|resume|close|reset|reresolve ID|all
-  cli export ID --out FILE [--format csv|long|wide|json]
+  cli export ID --out FILE [--format csv|long|wide|json] [--meta]
   cli routes ID | cli route ID [--at MS]
   cli comments ID | cli comment ID "text" [--hop N]
   cli summaries | cli sessions | cli workspaces | cli configs | cli packettypes | cli interfaces
@@ -55,7 +55,7 @@ if (argv[0] === 'cli') {
       case 'pause': case 'resume': case 'close': case 'reset': case 'reresolve':
         for (const id of await ids(pos[0])) await call(cmd === 'close' ? 'DELETE' : 'POST', '/api/targets/' + id + (cmd === 'close' ? '' : '/' + (cmd === 'pause' ? 'stop' : cmd === 'resume' ? 'start' : cmd)), cmd === 'close' ? undefined : {});
         out('ok'); break;
-      case 'export': { const txt = await call('GET', '/api/targets/' + pos[0] + '/export?all=1&format=' + (flags.format || 'csv')); if (flags.out) { fs.writeFileSync(flags.out, txt); out('wrote ' + flags.out); } else out(txt); break; }
+      case 'export': { let txt = await call('GET', '/api/targets/' + pos[0] + '/export?all=1&format=' + (flags.format || 'csv') + (flags.meta ? '&meta=1' : '')); if (typeof txt !== 'string') txt = JSON.stringify(txt, null, 2); if (flags.out) { fs.writeFileSync(flags.out, txt); out('wrote ' + flags.out); } else out(txt); break; }
       case 'routes': out(await call('GET', '/api/targets/' + pos[0] + '/routes')); break;
       case 'route': out(await call('GET', '/api/targets/' + pos[0] + '/route' + (flags.at ? '?at=' + flags.at : ''))); break;
       case 'comments': out(await call('GET', '/api/targets/' + pos[0] + '/comments')); break;
@@ -610,22 +610,33 @@ function checkAlerts(t) {
 }
 
 // ---- export ----
-function exportText(t, fmt, focusMs, all) {
-  if (fmt === 'json') { // structured results with destination, probe method, timestamp and configuration (spec §11)
-    const cfg = cfgOf(t);
-    const o = {
-      app: 'PingTracer', version: APP_VERSION, exported: new Date().toISOString(),
-      target: { host: t.host, ip: t.ip || null, name: t.name || t.host, proto: t.proto || 'icmp', port: t.port || null,
-        destState: t.destState || null, startedAt: t.startedAt ? new Date(t.startedAt).toISOString() : null, rounds: t.count || 0, finalTtl: t.finalTtl || null },
-      config: { intervalMs: cfg.intervalMs, timeoutMs: cfg.timeoutMs, packetSize: cfg.packetSize, maxHops: cfg.maxHops },
-      hops: t.hops.map(h => { const s = stats(h, focusMs);
-        const o = { ttl: h.ttl, ip: h.ip || null, name: settings.hostNames[h.ip] || h.name || null,
-          stats: { count: s.count, lost: s.lost, lossPct: +s.lossPct.toFixed(2), avgMs: s.avg, minMs: s.min, maxMs: s.max, curMs: s.cur, jitterMs: s.jitter, mos: s.mos } };
-        if (all) o.samples = h.samples.map(x => ({ t: new Date(x.t).toISOString(), ms: x.ms }));
-        return o; })
-    };
-    return JSON.stringify(o, null, 2);
-  }
+// JSON results export (spec §11): destination, probe method, timestamp and the effective probe configuration.
+// Hop stats caches (_c) are non-enumerable, so JSON.stringify never serialises them.
+function exportJson(t, focusMs, all) {
+  const cfg = cfgOf(t), named = (settings.configs || []).find(c => c.id === t.configId);
+  const o = {
+    app: 'PingTracer', version: APP_VERSION, 'exported-at': new Date().toISOString(), 'focus-ms': +focusMs || null,
+    target: { id: t.id, host: t.host, ip: t.ip || null, name: t.name || t.host, proto: t.proto || 'icmp', port: t.port || null,
+      destState: t.destState || null, startedAt: t.startedAt ? new Date(t.startedAt).toISOString() : null, rounds: t.count || 0, finalTtl: t.finalTtl || null,
+      config: { id: t.configId || 'default', name: named ? named.name : 'Default', intervalMs: cfg.intervalMs, timeoutMs: cfg.timeoutMs, packetSize: cfg.packetSize, maxHops: cfg.maxHops, keepDays: cfg.keepDays } },
+    hops: t.hops.map(h => { const s = stats(h, focusMs);
+      const x = { ttl: h.ttl, ip: h.ip || null, name: settings.hostNames[h.ip] || h.name || null,
+        stats: { count: s.count, lost: s.lost, lossPct: +s.lossPct.toFixed(2), avgMs: s.avg, minMs: s.min, maxMs: s.max, curMs: s.cur, jitterMs: s.jitter, mos: s.mos } };
+      if (all) x.samples = h.samples.map(y => ({ t: new Date(y.t).toISOString(), ms: y.ms }));
+      return x; })
+  };
+  return JSON.stringify(o, null, 2);
+}
+// Opt-in (#) metadata header for CSV/TSV exports (?meta=1): app, version, export time, destination and effective config.
+function exportMeta(t) {
+  const cfg = cfgOf(t);
+  return ['# app PingTracer', '# version ' + APP_VERSION, '# exported-at ' + new Date().toISOString(),
+    '# target host=' + t.host + ' ip=' + (t.ip || '') + ' proto=' + (t.proto || 'icmp') + ' port=' + (t.port || ''),
+    '# config id=' + (t.configId || 'default') + ' intervalMs=' + cfg.intervalMs + ' timeoutMs=' + cfg.timeoutMs + ' packetSize=' + cfg.packetSize + ' maxHops=' + cfg.maxHops + ' keepDays=' + cfg.keepDays].join('\n') + '\n';
+}
+// Without meta the text exports are byte-identical to previous releases (existing consumers parse them).
+function exportText(t, fmt, focusMs, all, meta) { const body = exportRows(t, fmt, focusMs, all); return meta ? exportMeta(t) + body : body; }
+function exportRows(t, fmt, focusMs, all) {
   const sep = fmt === 'csv' ? ',' : '\t';
   const hops = t.hops;
   if (!all) {
@@ -1286,9 +1297,9 @@ const handle = async (req, res, remote = false) => {
         return send(res, 200, exportRange(t, from, to, u.searchParams.get('mode') === 'periods' ? 'periods' : 'samples', +u.searchParams.get('period'), u.searchParams.get('format') === 'tsv' ? '\t' : ','), 'text/plain');
       }
       if (act === 'export') {
-        const fmt = u.searchParams.get('format') || 'long';
-        const txt = exportText(t, fmt, focus, u.searchParams.get('all') === '1');
-        return send(res, 200, txt, fmt === 'json' ? 'application/json' : 'text/plain');
+        const fmt = u.searchParams.get('format') || 'long', all = u.searchParams.get('all') === '1';
+        if (fmt === 'json') return send(res, 200, exportJson(t, focus, all), 'application/json');
+        return send(res, 200, exportText(t, fmt, focus, all, u.searchParams.get('meta') === '1'), 'text/plain');
       }
     }
     if (p === '/api/settings') {

@@ -711,7 +711,7 @@ document.querySelectorAll('.menu button[data-a]').forEach(b=>b.onclick=async()=>
   try{
   if(a.startsWith('txt')||a==='csv'){if(!t)return toast('No target');const fmt=a==='csv'?'csv':a==='txt-wide'?'wide':'long';
     dl(`${t.host}-${a==='txt-stats'?'stats':'samples'}.${a==='csv'?'csv':'txt'}`,await api(`/api/targets/${t.id}/export?focus=${foc}&format=${fmt}&all=${a==='txt-stats'?0:1}`))}
-  else if(a==='json'){if(!t)return toast('No target');dl(`${t.host}-results.json`,await api(`/api/targets/${t.id}/export?focus=${foc}&format=json`),'application/json')}
+  else if(a==='json'){if(!t)return toast('No target');dl(`${t.host}-results.json`,JSON.stringify(await api(`/api/targets/${t.id}/export?focus=${foc}&format=json&all=1`),null,2),'application/json')}
   else if(a==='clip-text'){if(!t)return;await navigator.clipboard.writeText(await api(`/api/targets/${t.id}/export?focus=${foc}`));toast('Copied')}
   else if(a==='set-save'){const n=prompt('Name for this sample set:',t?t.host:'sampleset');if(!n)return;await api('/api/sets',{b:{name:n,targetId:t?.id}});toast('Saved '+n)}
   else if(a==='set-recent'){const l=await api('/api/sets');$('#recentList').innerHTML=l.map(x=>`<div class="alert row" style="border-bottom:1px solid var(--bd)"><b>${esc(x.name)}</b><span class="mut">${new Date(x.mtime).toLocaleString()} · ${(x.size/1024).toFixed(0)} KB</span><span class="sp"></span><button data-o="${esc(x.name)}">Open</button><button data-d="${esc(x.name)}">Delete</button></div>`).join('')||'<div class="alert mut">No saved sets yet (File ▸ Save sample set).</div>';

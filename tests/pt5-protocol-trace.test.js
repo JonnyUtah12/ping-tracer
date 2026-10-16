@@ -94,12 +94,12 @@ test('JSON export carries destination, probe method, timestamp, configuration an
   const e = r.body;
   assert.strictEqual(e.app, 'PingTracer');
   assert.ok(/^\d+\.\d+\.\d+$/.test(e.version), 'export must carry the app version');
-  assert.ok(!Number.isNaN(Date.parse(e.exported)), 'export must carry an export timestamp');
+  assert.ok(!Number.isNaN(Date.parse(e['exported-at'])), 'export must carry an export timestamp');
   assert.strictEqual(e.target.host, '127.0.0.1');
   assert.strictEqual(e.target.proto, 'tcp');
   assert.strictEqual(e.target.port, 18765);
   assert.strictEqual(e.target.destState, 'open');
-  assert.ok(e.config && typeof e.config.timeoutMs === 'number' && typeof e.config.maxHops === 'number', 'configuration block required');
+  assert.ok(e.target.config && typeof e.target.config.timeoutMs === 'number' && typeof e.target.config.maxHops === 'number', 'configuration block required');
   const fin = e.hops.find(h => h.ttl === 3);
   assert.ok(fin && fin.stats.count >= 1 && typeof fin.stats.avgMs === 'number' && typeof fin.stats.lossPct === 'number', 'per-hop statistics required');
   // samples only with all=1
