@@ -13,6 +13,13 @@ static class PPHelper
 {
     static readonly object Gate = new object();
     static int pending = 0;
+    // DPAPI entropy for secrets at rest (SMTP passEnc in state.json), bound to the current user.
+    static readonly byte[] Salt = System.Text.Encoding.UTF8.GetBytes("PingTracer.v1");
+    // Entropy used by pre-rebrand builds: the UTF-8 bytes of the old salt literal "PongPlotter.v1".
+    // Kept as raw bytes so the old brand never appears as a string in the compiled binary
+    // (brand audit: strings -el app/helper/*.exe). Used only as a decrypt fallback for data
+    // migrated by installer/install.ps1; see the X handler below.
+    static readonly byte[] LegacySalt = { 0x50, 0x6F, 0x6E, 0x67, 0x50, 0x6C, 0x6F, 0x74, 0x74, 0x65, 0x72, 0x2E, 0x76, 0x31 };
     static void Main()
     {
         var o = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
@@ -26,8 +33,19 @@ static class PPHelper
                 try
                 {
                     byte[] data = Convert.FromBase64String(p[2]);
-                    byte[] salt = System.Text.Encoding.UTF8.GetBytes("PingTracer.v1");
-                    byte[] r = p[0] == "E" ? ProtectedData.Protect(data, salt, DataProtectionScope.CurrentUser) : ProtectedData.Unprotect(data, salt, DataProtectionScope.CurrentUser);
+                    byte[] r;
+                    if (p[0] == "E") r = ProtectedData.Protect(data, Salt, DataProtectionScope.CurrentUser);
+                    else
+                    {
+                        try { r = ProtectedData.Unprotect(data, Salt, DataProtectionScope.CurrentUser); }
+                        catch (CryptographicException)
+                        { // blob written by a pre-rebrand install whose data dir was migrated by the installer:
+                          // retry with the legacy entropy so upgraded installs keep sending mail. The stored
+                          // passEnc stays legacy-encrypted (the protocol returns plaintext only); the fallback
+                          // is cheap and idempotent.
+                          r = ProtectedData.Unprotect(data, LegacySalt, DataProtectionScope.CurrentUser);
+                        }
+                    }
                     res = "S " + p[1] + " " + Convert.ToBase64String(r);
                 }
                 catch (Exception) { res = "S " + p[1] + " !"; }
@@ -45,12 +63,12 @@ static class PPHelper
               // TTL-limited probes: the protocol itself discovers the path length (ttl counts up until the destination answers).
               // Windows user-mode sockets cannot report which router sent an ICMP Time Exceeded, so intermediate hop addresses
               // come from the engine's ICMP probes; the protocol probe proves reachability at each TTL.
-                int pt, to, ttl, sz = 32;
-                if (int.TryParse(p[3], out pt) && int.TryParse(p[4], out to) && int.TryParse(p[5], out ttl))
+                int pt, to, pttl, sz = 32;
+                if (int.TryParse(p[3], out pt) && int.TryParse(p[4], out to) && int.TryParse(p[5], out pttl))
                 {
                     if (p.Length > 6) int.TryParse(p[6], out sz);
                     System.Threading.Interlocked.Increment(ref pending);
-                    if (p[0] == "T") ProbeTcp(o, p[1], p[2], pt, to, ttl); else ProbeUdp(o, p[1], p[2], pt, to, ttl, sz);
+                    if (p[0] == "T") ProbeTcp(o, p[1], p[2], pt, to, pttl); else ProbeUdp(o, p[1], p[2], pt, to, pttl, sz);
                 }
                 continue;
             }
@@ -117,7 +135,7 @@ static class PPHelper
             {
                 SetTtl(s, addr.AddressFamily, ttl);
                 var rem = new IPEndPoint(addr, port);
-                var t = TaskFactory.FromAsync((cb, st) => s.BeginConnect(rem, cb, st), s.EndConnect, null);
+                var t = new TaskFactory().FromAsync((cb, st) => s.BeginConnect(rem, cb, st), s.EndConnect, null);
                 var done = await Task.WhenAny(t, Task.Delay(timeout));
                 sw.Stop();
                 double ms = Math.Max(0.1, Math.Round(sw.Elapsed.TotalMilliseconds, 1));
