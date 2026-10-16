@@ -52,7 +52,7 @@ test('boot: /api/info reports the engine, platform and version', async () => {
   await boot();
   const r = await req('GET', '/api/info');
   assert.equal(r.status, 200);
-  assert.equal(r.body.version, '1.0.0');
+  assert.match(r.body.version, /^\d+\.\d+\.\d+$/, 'version is a semver string (never assert a literal: it drifts on every release)');
   assert.equal(r.body.platform, os.platform());
   assert.equal(r.body.data, TMP);
 });
@@ -100,7 +100,7 @@ test('exports: csv rows, json envelope, meta=1 header', async () => {
   assert.match(js.type, /application\/json/);
   const o = js.body;
   assert.equal(o.app, 'PingTracer');
-  assert.equal(o.version, '1.0.0');
+  assert.equal(o.version, (await req('GET', '/api/info')).body.version, 'export envelope carries the running app version');
   assert.ok(!Number.isNaN(Date.parse(o['exported-at'])));
   assert.equal(o.target.host, '127.0.0.1');
   assert.equal(o.target.proto, 'icmp');
@@ -108,7 +108,7 @@ test('exports: csv rows, json envelope, meta=1 header', async () => {
   if (live) assert.equal(o.hops.length, 1, 'one loopback hop');
   const meta = await req('GET', '/api/targets/' + tid + '/export?format=csv&meta=1');
   assert.equal(meta.status, 200);
-  assert.ok(meta.text.startsWith('# app PingTracer\n# version 1.0.0\n'), 'opt-in metadata header');
+  assert.ok(meta.text.startsWith('# app PingTracer\n# version ' + (await req('GET', '/api/info')).body.version + '\n'), 'opt-in metadata header');
   assert.ok(meta.text.includes('# target host=127.0.0.1'));
 });
 

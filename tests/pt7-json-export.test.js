@@ -61,13 +61,14 @@ const GOLD = {
 const near = (a, b, m) => assert.ok(Math.abs(a - b) < 1e-9, m + ` (got ${a}, want ${b})`);
 
 test('format=json returns valid JSON with the required metadata', async () => {
-  const r = await raw(await port(), '/api/targets/1/export?format=json');
+  const p = await port();
+  const r = await raw(p, '/api/targets/1/export?format=json');
   assert.equal(r.status, 200);
   assert.match(r.type, /application\/json/);
   assert.ok(!/"_c"/.test(r.text), 'non-enumerable stats cache must not leak into the export');
   const o = JSON.parse(r.text);
   assert.equal(o.app, 'PingTracer');
-  assert.equal(o.version, '1.0.0');
+  assert.equal(o.version, JSON.parse((await raw(p, '/api/info')).text).version, 'envelope version matches the running app');
   assert.match(o['exported-at'], /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.equal(o['focus-ms'], null);
   assert.equal(o.target.host, 'example.com');
@@ -120,7 +121,7 @@ test('?meta=1 prepends # metadata lines and leaves the table bytes unchanged', a
   const r = await raw(p, '/api/targets/1/export?format=csv&all=1&meta=1');
   const lines = r.text.split('\n');
   assert.equal(lines[0], '# app PingTracer');
-  assert.equal(lines[1], '# version 1.0.0');
+  assert.equal(lines[1], '# version ' + JSON.parse((await raw(p, '/api/info')).text).version, 'metadata header carries the running app version');
   assert.match(lines[2], /^# exported-at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.equal(lines[3], '# target host=example.com ip=93.184.216.34 proto=tcp port=443');
   assert.equal(lines[4], '# config id=fast intervalMs=500 timeoutMs=800 packetSize=64 maxHops=16 keepDays=7');
