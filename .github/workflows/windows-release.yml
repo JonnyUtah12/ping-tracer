@@ -70,7 +70,14 @@ jobs:
         shell: bash
         run: |
           set -e
-          read OPEN CLOSED <<< "$(powershell -NoProfile -Command 'function Free([int]$s){for($p=$s;$p -lt $s+300;$p++){$l=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,$p);$ok=$true;try{$l.Start()}catch{$ok=$false}finally{$l.Stop()};if($ok){return $p}};throw \"no free port\"} $a=Free 20000; $b=Free ($a+1); Write-Output \"$a $b\"')"
+          # NOTE: the PS script must live in a file - inside "$( ... )" bash expands $vars even
+          # between single quotes (run #3: PS received an empty-variable script). YAML strips the
+          # block indentation, so the heredoc body below arrives at column 0.
+          cat > freeport.ps1 <<'PS1'
+          function Free([int]$s){for($p=$s;$p -lt $s+300;$p++){$l=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,$p);$ok=$true;try{$l.Start()}catch{$ok=$false}finally{$l.Stop()};if($ok){return $p}};throw "no free port"}
+          $a=Free 20000; $b=Free ($a+1); Write-Output "$a $b"
+          PS1
+          read OPEN CLOSED <<< "$(powershell -NoProfile -File freeport.ps1)"
           echo "test ports: open=$OPEN closed=$CLOSED"
           export OPEN
           powershell -NoProfile -Command '$l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, [int]$env:OPEN); $l.Start(); Start-Sleep -Seconds 20; $l.Stop()' &
