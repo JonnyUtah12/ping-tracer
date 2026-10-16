@@ -64,7 +64,7 @@ test('helper is active through the PP_HELPER hook (packettypes report tcp/udp av
 test('TCP route trace: open port -> finalTtl discovered, destState open, protocol RTT recorded', async () => {
   const { port } = await boot();
   const id = (await req(port, 'POST', '/api/targets', { host: '127.0.0.1', proto: 'tcp', port: 18765, adhoc: true })).body.id;
-  const t = await until(port, id, x => x.finalTtl === 3 && x.destState === 'open', 'finalTtl 3 + destState open');
+  const t = await until(port, id, x => x.finalTtl === 3 && x.destState === 'open' && x.count >= 1, 'finalTtl 3 + destState open + a persisted round');
   const fin = t.hops.find(h => h.ttl === 3);
   assert.ok(fin && fin.stats.count >= 1, 'final hop must carry samples');
   assert.ok(fin.stats.min > 0, 'final hop latency must come from the protocol probe');
@@ -73,7 +73,7 @@ test('TCP route trace: open port -> finalTtl discovered, destState open, protoco
 test('TCP route trace: closed port (RST) -> reached at hop 1, destState refused, host not called offline', async () => {
   const { port } = await boot();
   const id = (await req(port, 'POST', '/api/targets', { host: '127.0.0.1', proto: 'tcp', port: 18766, adhoc: true })).body.id;
-  const t = await until(port, id, x => x.finalTtl === 1 && x.destState === 'refused', 'finalTtl 1 + destState refused');
+  const t = await until(port, id, x => x.finalTtl === 1 && x.destState === 'refused' && x.count >= 1, 'finalTtl 1 + destState refused + a persisted round');
   const fin = t.hops.find(h => h.ttl === 1);
   assert.ok(fin && fin.ip === '127.0.0.1', 'the RST proves the destination address; it must be shown, not hidden');
 });
@@ -81,7 +81,7 @@ test('TCP route trace: closed port (RST) -> reached at hop 1, destState refused,
 test('UDP route trace: no answer -> destState filtered (never offline); port unreachable -> refused', async () => {
   const { port } = await boot();
   const a = (await req(port, 'POST', '/api/targets', { host: '127.0.0.1', proto: 'udp', port: 18767, adhoc: true })).body.id;
-  const ta = await until(port, a, x => x.destState === 'filtered' && x.finalTtl === 3, 'udp filtered at finalTtl 3');
+  const ta = await until(port, a, x => x.destState === 'filtered' && x.finalTtl === 3 && x.count >= 1, 'udp filtered at finalTtl 3 with a persisted round');
   assert.ok(ta.hops.find(h => h.ttl === 3).ip === '127.0.0.1', 'ICMP attribution still shows the destination hop');
   const b = (await req(port, 'POST', '/api/targets', { host: '127.0.0.1', proto: 'udp', port: 18768, adhoc: true })).body.id;
   await until(port, b, x => x.destState === 'refused', 'udp port-unreachable refused');
@@ -90,7 +90,7 @@ test('UDP route trace: no answer -> destState filtered (never offline); port unr
 test('JSON export carries destination, probe method, timestamp, configuration and per-hop statistics', async () => {
   const { port } = await boot();
   const id = (await req(port, 'POST', '/api/targets', { host: '127.0.0.1', proto: 'tcp', port: 18765, adhoc: true })).body.id;
-  await until(port, id, x => x.finalTtl === 3 && x.destState === 'open', 'trace to settle');
+  await until(port, id, x => x.finalTtl === 3 && x.destState === 'open' && x.count >= 1, 'trace to settle (round persisted)');
   const r = await req(port, 'GET', '/api/targets/' + id + '/export?format=json');
   assert.strictEqual(r.status, 200);
   const e = r.body;
