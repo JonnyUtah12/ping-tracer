@@ -69,9 +69,10 @@ never touch it.
 ## Supported Windows versions & system requirements
 
 - **Designed for 64-bit Windows 11 and Windows Server 2022.** The bundled
-  runtime runs on any 64-bit Windows 10 or later, but the automated build and
-  test pipeline runs on a Windows 11-based GitHub runner; Server 2022 and older
-  builds are expected to work but are not individually verified.
+  runtime runs on any 64-bit Windows 10 or later. The automated build and test
+  pipeline runs on GitHub-hosted `windows-latest`, which currently resolves to
+  a Windows Server 2025 image; Windows 11, Server 2022, and older builds are
+  expected to work but are not individually verified.
 - 64-bit (x64) Windows with the in-box .NET Framework 4.x (present on every
   supported Windows version — nothing to install).
 - No administrator rights. No installer. No Python/Node/npm/SDK.

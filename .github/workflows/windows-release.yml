@@ -279,7 +279,7 @@ jobs:
             fs.writeFileSync("release-notes.md", out.join("\n").trim());
           ' "$ver"
           {
-            echo "Portable multi-target ping plotter for Windows 10/11 x64. Extract the zip, double-click PingTracer.exe. No installer, no admin rights, no Node."
+            echo "Portable multi-target ping plotter for 64-bit Windows. Designed for Windows 11 and Server 2022; the bundled runtime runs on any 64-bit Windows 10 or later. Extract the zip, double-click PingTracer.exe. No installer, no admin rights, no Node."
             echo
             if [ -s release-notes.md ]; then cat release-notes.md; else echo "See CHANGELOG.md (attached) for the full change list."; fi
           } > notes.md
