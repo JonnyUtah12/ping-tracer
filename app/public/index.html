@@ -168,6 +168,7 @@ dialog .row.foot{position:sticky;bottom:0;background:var(--panel);padding:14px 0
     <button data-a="txt-long">Export all samples (long)…</button>
     <button data-a="txt-wide">Export all samples (wide)…</button>
     <button data-a="csv">Export all samples (CSV)…</button>
+    <button data-a="json">Export results (JSON)…</button>
     <button data-a="range-exp">Export time range…</button>
     <hr>
     <button data-a="set-save">Save sample set…</button>
@@ -214,7 +215,7 @@ dialog .row.foot{position:sticky;bottom:0;background:var(--panel);padding:14px 0
 <div class="cmdbar">
   <form id="addf" class="trace-form">
     <span class="field"><svg viewBox="0 0 24 24" class="icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="host" list="recentHostList" placeholder="Hostname or IP address, e.g. 8.8.8.8" autofocus autocomplete="off" spellcheck="false"><datalist id="recentHostList"></datalist></span>
-    <select id="proto" title="Probe protocol for the destination (hops are always discovered with ICMP)"><option value="icmp">ICMP</option><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+    <select id="proto" title="Probe method. ICMP: echo probes per hop. TCP/UDP: TTL-limited route tracing (needs the native helper); hop addresses are attributed with ICMP"><option value="icmp">ICMP</option><option value="tcp">TCP</option><option value="udp">UDP</option></select>
     <input id="port" type="number" min="1" max="65535" placeholder="port" style="width:78px" hidden>
     <button class="pri">Trace</button>
   </form>
@@ -224,6 +225,7 @@ dialog .row.foot{position:sticky;bottom:0;background:var(--panel);padding:14px 0
   </div>
   <div class="grp">
     <button id="pause">Pause</button><button id="clear">Clear</button><button id="retrace">Re-trace route</button>
+    <button id="startAll" title="Start every closed or paused target">Start all</button><button id="stopAll" title="Stop every running target">Stop all</button>
     <button id="remoteBtn" title="Trace a target from another machine running the exe with --agent">Remote…</button>
     <label class="mut"><input type="checkbox" id="finalonly"> Final hop only</label>
   </div>
@@ -235,7 +237,7 @@ dialog .row.foot{position:sticky;bottom:0;background:var(--panel);padding:14px 0
     <div id="tiles" hidden></div>
     <table id="ovtable"><thead><tr><th class="l" data-k="host">Target</th><th data-k="status">Status</th><th data-k="avg">Avg</th><th data-k="cur">Cur</th><th data-k="loss">PL%</th><th data-k="jitter">Jitter</th><th data-k="mos">MOS</th><th>Last 10 min</th><th></th></tr></thead><tbody id="ovb"></tbody></table></div>
   <div class="card" id="traceCard" hidden>
-    <div class="row"><b id="tname"></b><span class="mut" id="tsum"></span>
+    <div class="row"><b id="tname"></b><span class="mut" id="tsum"></span><span id="destState" hidden style="font-size:12px;font-weight:600"></span>
       <label class="mut">Config <select id="cfgSel"></select></label><button id="bInsights">Insights</button><button id="bRoutes">Routes</button><button id="bComments">Comments</button><button id="bAddCol" title="Add a custom grid column; double-click a cell to fill it in">+ Column</button><button id="bResolve" title="Look hop names up again">Re-resolve</button><button id="bRename">Rename</button><button id="bReset" title="Clear data and re-trace, keeping the configuration">Reset</button><button id="bOpts" title="Keep or ad hoc, follow IP changes">Options…</button><span class="sp"></span><span class="mut">Click a row to graph · double-click Name to rename · right-click to hide/show hop</span></div>
     <div style="overflow:auto"><table id="tt"><thead><tr><th>Hop</th><th class="l">IP</th><th class="l">Name</th><th>Avg</th><th>Min</th><th>Max</th><th>Cur</th><th>PL%</th><th title="Lost packets">Err</th><th>Jitter</th><th>MOS</th><th>Count</th><th class="l" id="exth">Latency</th></tr></thead><tbody></tbody></table></div>
   </div>
@@ -314,6 +316,8 @@ $('#proto').onchange=()=>{const p=$('#proto').value;$('#port').hidden=p==='icmp'
 $('#interval').onchange=()=>api('/api/settings',{b:{intervalMs:+$('#interval').value}});
 $('#focus').onchange=refresh;$('#win').onchange=drawGraph;
 $('#pause').onclick=async()=>{const t=curT();if(!t)return;await api(`/api/targets/${t.id}/${t.running?'stop':'start'}`,{b:{}});refresh()};
+$('#startAll').onclick=async()=>{for(const t of targets)if(!t.running){try{await api(`/api/targets/${t.id}/start`,{b:{}})}catch{}}refresh()};
+$('#stopAll').onclick=async()=>{for(const t of targets)if(t.running){try{await api(`/api/targets/${t.id}/stop`,{b:{}})}catch{}}refresh()};
 $('#clear').onclick=async()=>{const t=curT();if(t&&confirm('Clear collected samples for '+t.host+'?')){await api(`/api/targets/${t.id}/clear`,{b:{}});refresh()}};
 $('#retrace').onclick=async()=>{const t=curT();if(t){await api(`/api/targets/${t.id}/retrace`,{b:{}});refresh()}};
 $('#finalonly').onchange=async()=>{const t=curT();if(t)await api(`/api/targets/${t.id}/mode`,{b:{mode:$('#finalonly').checked?'final':'full'}})};
@@ -347,6 +351,8 @@ function renderTable(){
   $('#bRoutes').textContent='Routes'+(t.routeChanges?` (${t.routeChanges})`:'');$('#bComments').textContent='Comments'+(t.comments?` (${t.comments})`:'');fillCfgSel(t);
   const fin=t.hops[t.hops.length-1];
   $('#tsum').textContent=`${t.hops.length} hops · ${t.count} rounds · ${t.finalTtl?'destination reached at hop '+t.finalTtl:'discovering route…'}`+(fin?` · final loss ${fin.stats.lossPct.toFixed(1)}%`:'');
+  { const ds=$('#destState'); // destination state from the protocol probe (TCP/UDP targets) — never call a filtered port "offline"
+    if(t.proto!=='icmp'&&t.destState){ds.hidden=false;ds.textContent='· destination: '+({open:'reached, port open',refused:'reached, port closed',filtered:'no response (filtered)',unreachable:'network unreachable',unknown:'unknown'}[t.destState]||t.destState);ds.style.color=t.destState==='open'||t.destState==='refused'?'var(--ok)':t.destState==='filtered'?'var(--warn)':'var(--bad)'}else ds.hidden=true;}
   const maxMs=Math.max(50,...t.hops.map(h=>h.stats.max||0));
   if(selHop==null||!t.hops.find(h=>h.ttl===selHop))selHop=t.finalTtl||t.hops[t.hops.length-1]?.ttl||null;
   $('#tt tbody').innerHTML=t.hops.map(h=>{const s=h.stats,pct=v=>v==null?0:Math.min(100,v/maxMs*100);
@@ -627,11 +633,19 @@ function showExportRange(){
 // ---- per-target options: ad hoc vs kept, follow IP changes ----
 function showTargetOptions(){
   const t=curT();if(!t)return;const literal=/^\d{1,3}(\.\d{1,3}){3}$/.test(t.host)||t.host.includes(':');
-  showGen(`Target options – ${t.name||t.host}`,`<div class="row"><label class="lw">Data</label><select id="toP"><option value="local">Keep: saved, restored after restart, kept as a stored session when closed</option><option value="adhoc">Ad hoc: discarded when closed or when PingTracer exits</option></select></div>
+  showGen(`Target options – ${t.name||t.host}`,`<div class="row"><label class="lw">Probe method</label><select id="toProto" ${t.agent?'disabled':''}><option value="icmp">ICMP</option><option value="tcp">TCP</option><option value="udp">UDP</option></select><input id="toPort" type="number" min="1" max="65535" placeholder="dest port" style="width:90px" ${(t.proto==='icmp'||!t.proto)?'hidden':''}><span class="mut">${t.agent?'targets traced by a remote agent keep their original probe':'changing the probe or port re-traces the route from scratch'}</span></div>
+   <div class="row"><label class="lw">Data</label><select id="toP"><option value="local">Keep: saved, restored after restart, kept as a stored session when closed</option><option value="adhoc">Ad hoc: discarded when closed or when PingTracer exits</option></select></div>
    <div class="row"><label class="lw">Follow IP changes</label><input id="toF" type="checkbox" ${t.followIp?'checked':''} ${literal?'disabled':''}><span class="mut">${literal?'only for hostnames':'look the hostname up every 5 minutes and follow it to a new address'}</span></div>
    <div class="row foot"><span class="sp"></span><button id="toSave" class="pri">Save</button></div>`);
-  $('#toP').value=t.adhoc?'adhoc':'local';
-  $('#toSave').onclick=async()=>{try{await api(`/api/targets/${t.id}/update`,{b:{persistence:$('#toP').value,followIp:$('#toF').checked}});$('#dGen').close();refresh()}catch(e){toast(e.message)}};
+  $('#toP').value=t.adhoc?'adhoc':'local';$('#toProto').value=t.proto||'icmp';$('#toPort').value=t.port||'';
+  $('#toProto').onchange=()=>{$('#toPort').hidden=$('#toProto').value==='icmp'};
+  $('#toSave').onclick=async()=>{try{
+    const b={persistence:$('#toP').value,followIp:$('#toF').checked};let probeChanged=false;
+    if(!t.agent){const np=$('#toProto').value;probeChanged=np!==t.proto||np!=='icmp'&&+$('#toPort').value>0&&+$('#toPort').value!==t.port;
+      b.proto=np;if(np!=='icmp'){const p=+$('#toPort').value;if(p>=1&&p<=65535)b.port=p;}}
+    await api(`/api/targets/${t.id}/update`,{b});
+    if(probeChanged)await api(`/api/targets/${t.id}/retrace`,{b:{}}); // fresh route discovery + destination state for the new probe
+    $('#dGen').close();refresh()}catch(e){toast(e.message)}};
 }
 
 // ---- web users ----
@@ -697,6 +711,7 @@ document.querySelectorAll('.menu button[data-a]').forEach(b=>b.onclick=async()=>
   try{
   if(a.startsWith('txt')||a==='csv'){if(!t)return toast('No target');const fmt=a==='csv'?'csv':a==='txt-wide'?'wide':'long';
     dl(`${t.host}-${a==='txt-stats'?'stats':'samples'}.${a==='csv'?'csv':'txt'}`,await api(`/api/targets/${t.id}/export?focus=${foc}&format=${fmt}&all=${a==='txt-stats'?0:1}`))}
+  else if(a==='json'){if(!t)return toast('No target');dl(`${t.host}-results.json`,await api(`/api/targets/${t.id}/export?focus=${foc}&format=json`),'application/json')}
   else if(a==='clip-text'){if(!t)return;await navigator.clipboard.writeText(await api(`/api/targets/${t.id}/export?focus=${foc}`));toast('Copied')}
   else if(a==='set-save'){const n=prompt('Name for this sample set:',t?t.host:'sampleset');if(!n)return;await api('/api/sets',{b:{name:n,targetId:t?.id}});toast('Saved '+n)}
   else if(a==='set-recent'){const l=await api('/api/sets');$('#recentList').innerHTML=l.map(x=>`<div class="alert row" style="border-bottom:1px solid var(--bd)"><b>${esc(x.name)}</b><span class="mut">${new Date(x.mtime).toLocaleString()} · ${(x.size/1024).toFixed(0)} KB</span><span class="sp"></span><button data-o="${esc(x.name)}">Open</button><button data-d="${esc(x.name)}">Delete</button></div>`).join('')||'<div class="alert mut">No saved sets yet (File ▸ Save sample set).</div>';

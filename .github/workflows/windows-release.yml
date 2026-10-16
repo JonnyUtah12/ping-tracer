@@ -57,6 +57,24 @@ jobs:
       - name: build SEA exe
         run: powershell -ExecutionPolicy Bypass -File app\build.ps1
 
+      # PT-4/PT-5: exercise the freshly compiled helper's TTL-limited protocol probes on a real
+      # Windows runner. Loopback: an open TCP port must answer "ok", a closed TCP port "refused"
+      # (RST), a closed UDP port "refused" (ICMP port-unreachable) or "timeout" if the runner
+      # suppresses it - never a crash, hang or malformed line. ICMP line must stay well-formed.
+      - name: helper protocol probe smoke test
+        shell: bash
+        run: |
+          set -e
+          powershell -NoProfile -Command '$l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 18765); $l.Start(); Start-Sleep -Seconds 15; $l.Stop()' &
+          sleep 2
+          out=$(printf 'T 1 127.0.0.1 18765 2000 1\nT 2 127.0.0.1 18766 2000 1\nU 3 127.0.0.1 18766 2000 1\n4 127.0.0.1 1 2000 32\n' | timeout 30 ./app/helper/pphelper.exe)
+          echo "$out"
+          echo "$out" | grep -q '^1 ok 127\.0\.0\.1 [0-9.]*$' || { echo "FAIL: TCP open port did not answer ok"; exit 1; }
+          echo "$out" | grep -q '^2 refused 127\.0\.0\.1 [0-9.]*$' || { echo "FAIL: TCP closed port did not answer refused"; exit 1; }
+          echo "$out" | grep -Eq '^3 (refused 127\.0\.0\.1|timeout -) [0-9.]*$' || { echo "FAIL: UDP probe returned no valid status"; exit 1; }
+          echo "$out" | grep -Eq '^4 (ok|ttl|timeout|err) ' || { echo "FAIL: ICMP probe line malformed"; exit 1; }
+          echo "helper protocol probes OK (TCP ok/refused, UDP valid, ICMP valid)"
+
       # Release gate: the final artifact must come back clean from Microsoft
       # Defender. A detection blocks publication unless packaging/
       # defender-allowlist.json carries an entry for that exact threat name
