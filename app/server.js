@@ -364,7 +364,7 @@ function rdns(ip) {
   if (!ip) return Promise.resolve('');
   if (settings.hostNames[ip]) return Promise.resolve(settings.hostNames[ip]);
   if (nameCache.has(ip)) return Promise.resolve(nameCache.get(ip));
-  return new Promise(r => dns.reverse(ip, (e, n) => { const v = e || !n.length ? '' : n[0]; nameCache.set(ip, v); r(v); }));
+  return new Promise(r => dns.reverse(ip, (e, n) => { const v = e || !n.length ? '' : n[0]; nameCache.set(ip, v); if (nameCache.size > 5000) nameCache.delete(nameCache.keys().next().value); r(v); })); // bounded: a LAN scan or hostile target set must not grow it without limit
 }
 
 // ---- configurations: named presets (interval, timeout, packet size, max hops, history retention). Targets without one use the defaults in Settings. ----
@@ -1236,6 +1236,9 @@ const handle = async (req, res, remote = false) => {
     if (mt) {
       const t = targets.find(x => x.id === +mt[1]); if (!t || !visible(t)) return send(res, 404, { error: 'not found' });
       const act = mt[2];
+      // state-changing actions must not be reachable by GET: a read-only role (viewer/LiveShare) is defined as
+      // GET/HEAD-only in accessAllowed, and cross-site simple requests (img/script tags) must never mutate state.
+      if (act && ['start', 'stop', 'clear', 'retrace'].includes(act) && m !== 'POST') return send(res, 405, { error: 'use POST for this action' });
       if (!act && m === 'GET') return send(res, 200, view(t, focus, rng));
       if (act === 'raw') { // incremental sample feed used by controllers pulling from this agent
         const since = +u.searchParams.get('since') || 0;
@@ -1256,13 +1259,13 @@ const handle = async (req, res, remote = false) => {
       if (act === 'comments') {
         if (m === 'GET') { const from = +u.searchParams.get('start') || 0, to = +u.searchParams.get('end') || Infinity; return send(res, 200, (t.comments || []).filter(c => c.t >= from && c.t < to)); }
         const b = await readBody(req); t.comments = t.comments || [];
-        if (m === 'POST') { const text = String(b.text || '').trim().slice(0, 2000); if (!text) return send(res, 400, { error: 'empty comment' }); const c = { id: newId(), t: +b.t || Date.now(), text, hop: b.hop ? +b.hop : null }; t.comments.push(c); save(); return send(res, 200, c); }
+        if (m === 'POST') { const text = String(b.text || '').trim().slice(0, 2000); if (!text) return send(res, 400, { error: 'empty comment' }); const c = { id: newId(), t: +b.t || Date.now(), text, hop: b.hop ? +b.hop : null }; t.comments.push(c); if (t.comments.length > 1000) t.comments.splice(0, t.comments.length - 1000); save(); return send(res, 200, c); }
         if (m === 'PUT') { const c = t.comments.find(x => x.id === b.id); if (!c) return send(res, 404, { error: 'not found' }); if (b.text != null) c.text = String(b.text).slice(0, 2000); save(); return send(res, 200, c); }
         if (m === 'DELETE') { t.comments = t.comments.filter(x => x.id !== b.id); save(); return send(res, 200, { ok: true }); }
       }
       if (act === 'column' && m === 'POST') { // custom grid column: {name, hop, value} (empty value clears the cell; clear:true drops the column)
         const b = await readBody(req), name = String(b.name || '').trim().slice(0, 30); if (!name || ['__proto__', 'constructor', 'prototype'].includes(name)) return send(res, 400, { error: 'invalid column name' }); t.customCols = t.customCols || {};
-        if (b.clear) delete t.customCols[name]; else { const col = t.customCols[name] = t.customCols[name] || {}; const v = String(b.value ?? '').slice(0, 200); if (b.hop != null) { if (v) col[b.hop] = v; else delete col[b.hop]; } }
+        if (b.clear) delete t.customCols[name]; else { const col = t.customCols[name] = t.customCols[name] || {}; if (!Object.keys(col).length && Object.keys(t.customCols).length > 50) { delete t.customCols[name]; return send(res, 400, { error: 'too many custom columns' }); } const v = String(b.value ?? '').slice(0, 200); if (b.hop != null) { if (v) col[b.hop] = v; else delete col[b.hop]; } }
         save(); return send(res, 200, { ok: true, customCols: t.customCols });
       }
       if (act === 'reresolve' && m === 'POST') { const b = await readBody(req); await checkIpChanges(t); for (const h of t.hops) { if (b.hop && +b.hop !== h.ttl) continue; if (!h.ip) continue; nameCache.delete(h.ip); h.name = await rdns(h.ip); } return send(res, 200, { ok: true }); }

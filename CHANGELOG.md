@@ -4,6 +4,27 @@ All notable changes to PingTracer are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Security hardening (audit 2026-10-16):** the state-changing target
+  actions `start`, `stop`, `clear` and `retrace` now require `POST`
+  (other methods get `405 Method Not Allowed`). The UI and the CLI already
+  used `POST`; this closes the path where a read-only web user or a
+  cross-site request could mutate state through a plain `GET`.
+
+### Fixed
+- **Security hardening (audit 2026-10-16):** bounded growth of long-lived
+  in-memory structures: the reverse-DNS name cache is capped (5000
+  entries, oldest evicted), comments per target are capped (1000, oldest
+  trimmed) and custom grid columns per target are capped (50).
+
+### Added
+- Security regression suite (`tests/security.test.js`): POST-only
+  enforcement, local-mode Host / Origin / Sec-Fetch-Site gates, static
+  path-traversal rejection, argument-injection-safe host validation,
+  oversized-body (413) handling, and the new growth caps.
+
 ## [1.1.0] - 2026-10-16
 
 ### Added
