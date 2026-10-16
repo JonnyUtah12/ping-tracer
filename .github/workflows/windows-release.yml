@@ -215,7 +215,8 @@ jobs:
           tj=$(curl -sf "http://127.0.0.1:8765/api/targets/$id")
           node -e 'const t=JSON.parse(process.argv[1]); if(t.id==null||t.host!=="127.0.0.1"){console.error("bad target view:",t);process.exit(1)}' "$tj"
           ex=$(curl -sf "http://127.0.0.1:8765/api/targets/$id/export?all=1&format=json")
-          node -e 'const e=JSON.parse(process.argv[1]); if(e.app!=="PingTracer"||!e.version||!e.exported){console.error("export metadata missing:",e);process.exit(1)}' "$ex"
+          # Spec §11 envelope (PT-7): the timestamp field is "exported-at", not "exported".
+          node -e 'const e=JSON.parse(process.argv[1]); if(e.app!=="PingTracer"||!e.version||!e["exported-at"]||!e.target||!Array.isArray(e.hops)){console.error("export metadata missing:",e);process.exit(1)}' "$ex"
           curl -sf -o /dev/null -w "csv export -> %{http_code}\n" "http://127.0.0.1:8765/api/targets/$id/export?all=1&format=csv"
           curl -sf -X POST http://127.0.0.1:8765/api/quit >/dev/null
           gone=0
