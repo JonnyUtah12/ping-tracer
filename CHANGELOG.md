@@ -4,6 +4,20 @@ All notable changes to PingTracer are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Right-edge elevator scrollbar for the main view: a slim themed thumb that
+  mirrors the page scroll, with drag, track-click paging, wheel, keyboard
+  (arrows/PageUp/PageDown/Home/End) support, dynamic thumb sizing, and
+  automatic hiding while the content fits. Screen-reader semantics
+  (`role=scrollbar`, `aria-valuenow`, labelled, focusable).
+
+### Fixed
+- Main view could squash cards instead of scrolling when the window was
+  shorter than the content (flex children were shrinkable); children now
+  keep their natural height so the view scrolls and nothing is clipped.
+
 ## [1.0.0] - 2026-10-16
 
 First PingTracer release — a rebrand and completion of the "Pong Plotter"
