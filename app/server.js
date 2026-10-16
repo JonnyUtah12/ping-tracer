@@ -190,7 +190,7 @@ function load() {
 }
 let lastSaved = '', saveErrorShown = false;
 function save() { const j = JSON.stringify(stateObj()); if (j === lastSaved) return; lastSaved = j; fs.writeFile(STATE_FILE, j, e => { if (e && !saveErrorShown) { saveErrorShown = true; console.error('cannot write ' + STATE_FILE + ': ' + e.message); } else if (!e) saveErrorShown = false; }); } // access-denied is logged once, never crashes the app
-setInterval(save, 10000);
+setInterval(save, 10000).unref(); // autosave; unref so requiring this module (tests) doesn't hold the event loop open
 process.on('SIGINT', () => { saveSync(); process.exit(); });
 function saveSync() { try { dbFlush(); fs.writeFileSync(STATE_FILE, JSON.stringify(stateObj())); } catch {} }
 
@@ -984,7 +984,7 @@ async function checkIpChanges(only) {
     if (ip && ip !== t.ip) { (t.comments = t.comments || []).push({ id: newId(), t: Date.now(), text: 'IP address changed: ' + t.ip + ' -> ' + ip, hop: null }); t.ip = ip; t.finalTtl = null; t.epoch = (t.epoch || 0) + 1; save(); }
   }
 }
-if (!AGENT) setInterval(() => checkIpChanges().catch(() => {}), 300000);
+if (!AGENT) setInterval(() => checkIpChanges().catch(() => {}), 300000).unref(); // unref: see autosave note above
 
 // ---- stored sessions, workspaces, summaries, guidance ----
 const skeleton = t => { const { timer, busy, agentError, ...r } = t; return { ...r, hops: (t.hops || []).map(h => ({ ttl: h.ttl, ip: h.ip, name: h.name, samples: [] })) }; };
@@ -1483,10 +1483,26 @@ const handle = async (req, res, remote = false) => {
     return send(res, 200, d, MIME[path.extname(name)] || 'application/octet-stream');
   } catch (e) { send(res, 500, { error: remote ? 'internal error' : String(e.message || e) }); }
 };
-http.createServer((q, s) => handle(q, s, false)).listen(PORT, AGENT ? '0.0.0.0' : '127.0.0.1', () => {
-  console.log(AGENT ? `PingTracer AGENT listening on 0.0.0.0:${PORT}\n  Agent token: ${AGENT_TOKEN}\n  (add this machine from a controller with URL http://<this-ip>:${PORT} and the token; traffic is plain HTTP, use a trusted network)`
-                    : `PingTracer running at http://127.0.0.1:${PORT}`);
-  startHelper(); startTray(); try { loadExtensions(); } catch (e) { extensions.length = 0; console.error('extensions unavailable:', e.message); } openDb(); load(); migrateSecrets(); applyWeb(); if (settings.wifiMonitor && !AGENT) wifiStart(); // an unreadable extensions folder must not stop startup (spec §12)
-  if (OPEN) openUi();
-}).on('error', e => { if (e.code === 'EADDRINUSE') { if (OPEN) { openUi(() => process.exit(0)); setTimeout(() => process.exit(0), 3000); } else { console.error('Port in use'); process.exit(1); } } });
-process.on('exit', () => { try { helper && helper.kill(); tray && tray.kill(); } catch {} });
+// PT-8 (spec §13): the pure engine/API helpers are exported so unit tests can require() this file without
+// starting the server. Everything with side effects (listen, helper/tray processes, DB, timers) stays below
+// the require.main guard, so `node app/server.js` behaves exactly as before and `require('app/server.js')`
+// only defines functions (it still creates the data dir, like any startup — point PP_DATA at a scratch dir).
+module.exports = {
+  APP_VERSION, SETTINGS_DEFAULTS, settings,
+  validHost, portOf, PORT_ERR,
+  clampNum, clampCfg, clampSettings, cfgOf,
+  sanitizeRules, sanitizeNames,
+  stats, statsRange, mos,
+  trackRoute, protocolFinalTtl, classifyDestState,
+  exportText, exportJson, exportMeta,
+};
+
+if (require.main === module) {
+  http.createServer((q, s) => handle(q, s, false)).listen(PORT, AGENT ? '0.0.0.0' : '127.0.0.1', () => {
+    console.log(AGENT ? `PingTracer AGENT listening on 0.0.0.0:${PORT}\n  Agent token: ${AGENT_TOKEN}\n  (add this machine from a controller with URL http://<this-ip>:${PORT} and the token; traffic is plain HTTP, use a trusted network)`
+                      : `PingTracer running at http://127.0.0.1:${PORT}`);
+    startHelper(); startTray(); try { loadExtensions(); } catch (e) { extensions.length = 0; console.error('extensions unavailable:', e.message); } openDb(); load(); migrateSecrets(); applyWeb(); if (settings.wifiMonitor && !AGENT) wifiStart(); // an unreadable extensions folder must not stop startup (spec §12)
+    if (OPEN) openUi();
+  }).on('error', e => { if (e.code === 'EADDRINUSE') { if (OPEN) { openUi(() => process.exit(0)); setTimeout(() => process.exit(0), 3000); } else { console.error('Port in use'); process.exit(1); } } });
+  process.on('exit', () => { try { helper && helper.kill(); tray && tray.kill(); } catch {} });
+}
