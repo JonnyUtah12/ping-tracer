@@ -37,9 +37,18 @@ jobs:
           node-version: "22"
 
       # Zero-dependency suite (node:test built-in runner), PT-8.
+      # Invocation note: `node --test tests/` (directory argument) only works
+      # on Node 26+; on 22/24 the runner treats it as a test file and dies
+      # with MODULE_NOT_FOUND (caught in dry run 38850130167). The quoted
+      # glob is expanded by node itself, so it behaves identically in Git
+      # Bash on Windows. The find guard keeps a missing tests/ tree red
+      # (an empty glob matches zero files and node --test exits 0).
       - name: tests
         shell: bash
-        run: node --test tests/
+        run: |
+          [ -n "$(find tests -name '*.test.js' -print -quit 2>/dev/null)" ] || \
+            { echo "FAIL: no *.test.js files under tests/ - the suite must exist"; exit 1; }
+          node --test "tests/**/*.test.js"
 
       # Compiles helper/pphelper.exe + helper/pptray.exe with the .NET
       # Framework csc that ships with Windows, then builds dist\PingTracer.exe
