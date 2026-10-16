@@ -14,6 +14,7 @@ const argv = process.argv.slice(2), argOf = k => (argv.find(a => a.startsWith(k 
 const AGENT = argv.includes('--agent'); // remote-agent mode: listens on the network, token-protected
 const AGENT_TOKEN = argOf('--token') || process.env.PP_TOKEN || require('crypto').randomBytes(12).toString('hex');
 const PORT = +argOf('--port') || +process.env.PORT || (AGENT ? 8766 : 8765);
+const APP_VERSION = '1.0.0'; // keep in sync with git tags and CHANGELOG.md
 
 // ---- command-line automation: "PingTracer.exe cli <command> ..." drives a running instance through its local API ----
 if (argv[0] === 'cli') {
@@ -35,7 +36,7 @@ if (argv[0] === 'cli') {
   cli stats ID [--focus MS]        statistics for every hop
   cli timeline ID [--hop N --window MS]
   cli pause|resume|close|reset|reresolve ID|all
-  cli export ID --out FILE [--format csv|long|wide]
+  cli export ID --out FILE [--format csv|long|wide|json]
   cli routes ID | cli route ID [--at MS]
   cli comments ID | cli comment ID "text" [--hop N]
   cli summaries | cli sessions | cli workspaces | cli configs | cli packettypes | cli interfaces
@@ -77,14 +78,46 @@ const BASE = sea ? path.dirname(process.execPath) : __dirname;
 // When installed by the setup program (installed.flag next to the exe) user data lives in %LOCALAPPDATA%\PingTracer so upgrades and
 // uninstalls never touch it; a portable exe keeps its data folder next to itself.
 const INSTALLED = !!sea && fs.existsSync(path.join(BASE, 'installed.flag'));
-const DATA_DIR = process.env.PP_DATA || (INSTALLED && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'PingTracer', AGENT ? 'data-agent' : 'data') : path.join(BASE, AGENT ? 'data-agent' : 'data'));
-const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const WIN = os.platform() === 'win32';
+let DATA_DIR = process.env.PP_DATA || (INSTALLED && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'PingTracer', AGENT ? 'data-agent' : 'data') : path.join(BASE, AGENT ? 'data-agent' : 'data'));
+let STATE_FILE = path.join(DATA_DIR, 'state.json');
 const BACKGROUND = argv.includes('--background'); // started by Windows at logon: stay in the tray, don't open a window
 const OPEN = !AGENT && !BACKGROUND && (sea || process.env.PP_OPEN) && !process.env.PP_NO_OPEN; // open the browser when run as the exe
-fs.mkdirSync(DATA_DIR, { recursive: true });
+// Spec §12: an unwritable data location (portable exe on a write-protected share, access-denied) must not crash the app.
+// Fall back to the per-user local folder, then the temp folder; only exit with a clear message if nothing is writable.
+(function ensureDataDir() {
+  const local = process.env.LOCALAPPDATA || (WIN ? path.join(process.env.USERPROFILE || os.homedir(), 'AppData', 'Local') : path.join(os.homedir(), '.local', 'share'));
+  const tries = [...new Set([DATA_DIR, path.join(local, 'PingTracer', AGENT ? 'data-agent' : 'data'), path.join(os.tmpdir(), 'PingTracer', AGENT ? 'data-agent' : 'data')])];
+  for (const d of tries) {
+    try { fs.mkdirSync(d, { recursive: true }); if (d !== DATA_DIR) { DATA_DIR = d; STATE_FILE = path.join(d, 'state.json'); console.error('data folder is not writable; using ' + d); } return; } catch {}
+  }
+  console.error('PingTracer cannot create its data folder (' + DATA_DIR + '). Check folder permissions and start again.');
+  process.exit(1);
+})();
 
-const settings = { historyDays: 30, intervalMs: 2500, timeoutMs: 2000, packetSize: 56, maxHops: 30, maxSamples: 20000, alertRules: [], hostNames: {} };
+// ---- settings validation (spec §12): every numeric setting has a hard range. A corrupt or hand-edited state.json
+// must never leave the engine in an invalid state, so these bounds are applied when state.json loads and again
+// before every save. Out-of-range values clamp; non-numeric values fall back to the built-in default. ----
+const SETTINGS_DEFAULTS = { historyDays: 30, intervalMs: 2500, timeoutMs: 2000, packetSize: 56, maxHops: 30, maxSamples: 20000 };
+const settings = { ...SETTINGS_DEFAULTS, alertRules: [], hostNames: {} };
+const NUM_RANGE = { historyDays: [1, 3650], intervalMs: [250, 3600000], timeoutMs: [200, 10000], packetSize: [0, 1400], maxHops: [1, 64], maxSamples: [100, 200000] };
+const CFG_RANGE = { intervalMs: [250, 3600000], timeoutMs: [200, 10000], packetSize: [0, 1400], maxHops: [1, 64], keepDays: [1, 3650] };
+// null, booleans, objects and non-numeric strings are "not a number" (fall back to the default); real numbers clamp
+const toNum = v => (v == null || typeof v === 'boolean' || typeof v === 'object') ? NaN : +v;
+const clampNum = (v, [lo, hi], dflt) => { const n = toNum(v); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt; };
+function clampCfg(c) { // named configurations may override only some fields; a garbage override is dropped (falls back to Settings)
+  for (const [k, r] of Object.entries(CFG_RANGE)) { if (c[k] == null || c[k] === '') continue; const n = toNum(c[k]); if (Number.isFinite(n)) c[k] = Math.max(r[0], Math.min(r[1], n)); else delete c[k]; } }
+function clampSettings() {
+  for (const [k, r] of Object.entries(NUM_RANGE)) settings[k] = clampNum(settings[k], r, SETTINGS_DEFAULTS[k]);
+  settings.alertRules = Array.isArray(settings.alertRules) ? sanitizeRules(settings.alertRules) : [];
+  settings.hostNames = sanitizeNames(settings.hostNames);
+  if (!['auto', '4', '6'].includes(String(settings.ipVersion))) delete settings.ipVersion;
+  if (settings.openMode !== 'app' && settings.openMode !== 'browser') delete settings.openMode;
+  if (settings.configs != null) { settings.configs = (Array.isArray(settings.configs) ? settings.configs : []).filter(c => c && typeof c === 'object'); for (const c of settings.configs) clampCfg(c); }
+  if (settings.web != null) { if (typeof settings.web !== 'object') delete settings.web; else if (settings.web.port != null) settings.web.port = clampNum(settings.web.port, [1024, 65535], 8767); }
+  if (settings.smtp != null) { if (typeof settings.smtp !== 'object') delete settings.smtp; else if (settings.smtp.port != null) settings.smtp.port = clampNum(settings.smtp.port, [1, 65535], 25); }
+  for (const k of ['summaries', 'liveShares', 'webUsers']) if (settings[k] != null && !Array.isArray(settings[k])) delete settings[k];
+}
 let targets = []; // {id,host,ip,name,hops:[{ttl,ip,name,samples:[{t,ms|null}]}],finalTtl,running,count,startedAt,hidden:[]}
 let nextId = 1;
 
@@ -144,14 +177,19 @@ function load() {
   try {
     const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     Object.assign(settings, s.settings || {});
-    targets = (s.targets || []).map(t => ({ ...t, running: false, timer: null }));
-    nextId = s.nextId || 1; sessions = s.sessions || [];
+    clampSettings(); // a corrupt or hand-edited state.json can never leave the engine in an invalid state (spec §12)
+    // restored targets must be structurally sane: bad hosts/ids would crash later paths (sessions, summaries, views)
+    targets = (Array.isArray(s.targets) ? s.targets : []).filter(t => t && typeof t === 'object' && validHost(t.host) && Number.isFinite(+t.id) && +t.id > 0)
+      .map(t => ({ ...t, id: Math.floor(+t.id), hops: (Array.isArray(t.hops) ? t.hops : []).filter(h => h && typeof h === 'object').map(h => ({ ...h, samples: Array.isArray(h.samples) ? h.samples : [] })), running: false, timer: null }));
+    nextId = Number.isFinite(+s.nextId) && +s.nextId > 0 ? Math.floor(+s.nextId) : 1;
+    for (const t of targets) if (t.id >= nextId) nextId = t.id + 1;
+    sessions = Array.isArray(s.sessions) ? s.sessions : [];
     // restored targets start at staggered times so their rounds don't all fire in the same instant
     targets.forEach((t, i) => { dbHydrate(t); if (t.autostart) setTimeout(() => { if (targets.includes(t)) start(t); }, i * Math.floor(cfgOf(t).intervalMs / Math.max(1, targets.length))); });
   } catch { /* first run */ }
 }
-let lastSaved = '';
-function save() { const j = JSON.stringify(stateObj()); if (j === lastSaved) return; lastSaved = j; fs.writeFile(STATE_FILE, j, () => {}); }
+let lastSaved = '', saveErrorShown = false;
+function save() { const j = JSON.stringify(stateObj()); if (j === lastSaved) return; lastSaved = j; fs.writeFile(STATE_FILE, j, e => { if (e && !saveErrorShown) { saveErrorShown = true; console.error('cannot write ' + STATE_FILE + ': ' + e.message); } else if (!e) saveErrorShown = false; }); } // access-denied is logged once, never crashes the app
 setInterval(save, 10000);
 process.on('SIGINT', () => { saveSync(); process.exit(); });
 function saveSync() { try { dbFlush(); fs.writeFileSync(STATE_FILE, JSON.stringify(stateObj())); } catch {} }
@@ -161,12 +199,14 @@ function saveSync() { try { dbFlush(); fs.writeFileSync(STATE_FILE, JSON.stringi
 let helper = null, helperReady = false, hid = 0, hbuf = '';
 const hpending = new Map();
 function startHelper() {
-  if (!WIN) return;
+  const custom = process.env.PP_HELPER; // test/dev hook: swap in another helper; a .js file runs under this node binary
+  if (!WIN && !custom) return;
   try {
-    let exe = path.join(BASE, 'helper', 'pphelper.exe');
-    if (sea) { exe = path.join(DATA_DIR, 'pphelper.exe'); writeIfChanged(exe, asset('helper/pphelper.exe')); }
+    let exe = path.join(BASE, 'helper', 'pphelper.exe'), args = [];
+    if (custom) { if (custom.endsWith('.js')) { args = [custom]; exe = process.execPath; } else exe = custom; }
+    else if (sea) { exe = path.join(DATA_DIR, 'pphelper.exe'); writeIfChanged(exe, asset('helper/pphelper.exe')); }
     if (!fs.existsSync(exe)) return;
-    helper = spawn(exe, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    helper = spawn(exe, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
     helper.stdout.on('data', d => {
       hbuf += d; let i;
       while ((i = hbuf.indexOf('\n')) >= 0) {
@@ -278,10 +318,10 @@ function updateTrayTip() {
   trayWrite(`tip PingTracer: ${running}/${targets.length} running` + (worst && worst.avg != null ? `, ${worst.avg.toFixed(0)}ms ${worst.lossPct.toFixed(0)}% loss` : ''));
 }
 
-function helperProto(kind, host, port, timeoutMs, size) {
+function helperProto(kind, host, port, timeoutMs, size, ttl) {
   return new Promise(resolve => {
     const id = String(++hid); hpending.set(id, resolve);
-    helper.stdin.write(`${kind === 'tcp' ? 'T' : 'U'} ${id} ${host} ${port} ${timeoutMs} ${size ?? settings.packetSize}\n`);
+    helper.stdin.write(`${kind === 'tcp' ? 'T' : 'U'} ${id} ${host} ${port} ${timeoutMs} ${ttl} ${size ?? settings.packetSize}\n`);
     setTimeout(() => { if (hpending.delete(id)) resolve(null); }, timeoutMs + 3000);
   });
 }
@@ -346,6 +386,25 @@ function trackRoute(t, now) {
   if (changed) { t.routes.push({ t: now, hops: sig.map((ip, i) => ({ ttl: i + 1, ip: ip || (prev[i] || '') })) }); if (t.routes.length > 300) t.routes.shift(); }
   else sig.forEach((ip, i) => { if (ip && !prev[i]) last.hops[i].ip = ip; });
 }
+// ---- TCP/UDP route-tracing classifiers (pure functions; unit-tested in tests/pt4-tcp-route-tracing.test.js) ----
+// Protocol-level path length: the smallest TTL at which the destination itself answers the protocol. A completed
+// TCP handshake ('ok' = port open) and an RST ('refused' = port closed) both prove the probe reached the
+// destination within that TTL; timeouts at lower TTLs are ICMP Time Exceeded en route (invisible to user-mode
+// sockets) or a filtered port, and never prove anything about the destination.
+function protocolFinalTtl(prs) {
+  const reached = prs.filter(x => x.r && (x.r.st === 'ok' || x.r.st === 'refused'));
+  return reached.length ? Math.min(...reached.map(x => x.ttl)) : null;
+}
+// Destination state from the protocol probe at the final TTL: open vs refused (RST) vs filtered (no response)
+// vs network unreachable. A filtered port is never reported as "offline" - it only proves the port does not answer.
+function classifyDestState(r) {
+  if (!r) return 'unknown';
+  if (r.st === 'ok') return 'open';
+  if (r.st === 'refused') return 'refused';
+  if (r.st === 'unreach') return 'unreachable';
+  if (r.st === 'timeout') return 'filtered';
+  return 'error';
+}
 async function runRound(t) {
   if (t.busy) return;
   t.busy = true;
@@ -353,11 +412,14 @@ async function runRound(t) {
   const upto = t.finalTtl ? t.finalTtl : cfg.maxHops;
   let ttls = t.mode === 'final' && t.finalTtl ? [t.finalTtl] : Array.from({ length: upto }, (_, i) => i + 1);
   if (!helperReady) await calibrate();
-  // TCP/UDP traces: hops are discovered with ICMP; the destination itself is measured with a TCP connect / UDP datagram
-  // (no raw sockets, so intermediate hops stay ICMP). Needs the native helper.
+  // TCP/UDP route tracing: TTL-limited protocol probes determine the path length and the destination state
+  // (connection succeeded / connection refused / no response). While the path is unknown the protocol probes run
+  // at every TTL; once the final TTL is known only the destination is probed with the protocol. Intermediate hop
+  // addresses are attributed with the ICMP probes: Windows user-mode TCP/UDP sockets cannot report which router
+  // sent an ICMP Time Exceeded. Needs the native helper; without it these targets fall back to ICMP.
   const px = (t.proto === 'tcp' || t.proto === 'udp') && helperReady;
-  const pxP = px ? helperProto(t.proto, t.ip || t.host, t.port || (t.proto === 'tcp' ? 80 : 53), cfg.timeoutMs, cfg.packetSize) : null;
-  if (px && t.finalTtl) ttls = ttls.filter(x => x !== t.finalTtl);
+  const pxTtl = px ? (t.finalTtl ? [t.finalTtl] : ttls) : [];
+  const pxP = pxTtl.map(ttl => ({ ttl, p: helperProto(t.proto, t.ip || t.host, t.port || (t.proto === 'tcp' ? 443 : 53), cfg.timeoutMs, cfg.packetSize, ttl) }));
   // Spread the round's probes out (up to 20 ms apart, within 40% of the interval) instead of firing every hop at once:
   // home routers rate-limit ICMP replies, and simultaneous bursts showed up as false packet loss on the first hops.
   const spacing = Math.min(20, Math.floor(cfg.intervalMs * 0.4 / Math.max(1, ttls.length)));
@@ -366,10 +428,19 @@ async function runRound(t) {
     return { ttl, r: await probe(t.ip || t.host, ttl, cfg.timeoutMs, cfg.packetSize) };
   }));
   if (px) {
-    const pr = await pxP, ok = pr && pr.st === 'ok';
-    let fttl = t.finalTtl;
-    if (!fttl) { const hit = results.filter(x => x.r.ip).map(x => x.ttl); fttl = results.find(x => x.r.final)?.ttl || (ok ? (hit.length ? Math.max(...hit) + 1 : 1) : null); }
-    if (fttl) { const i = results.findIndex(x => x.ttl === fttl); if (i >= 0) results.splice(i, 1); results.push({ ttl: fttl, r: { ip: t.ip || t.host, ms: ok ? pr.ms : null, final: ok } }); }
+    const prs = []; for (const x of pxP) prs.push({ ttl: x.ttl, r: await x.p });
+    // the smallest TTL at which the destination answers the protocol is the protocol-level path length
+    const finProto = protocolFinalTtl(prs);
+    const at = finProto != null ? finProto : t.finalTtl;
+    const dest = at != null ? prs.find(x => x.ttl === at) : null;
+    t.destState = classifyDestState(dest && dest.r);
+    if (at != null) {
+      const hit = prs.find(x => x.ttl === at && x.r && (x.r.st === 'ok' || x.r.st === 'refused'));
+      if (hit) { // the protocol probe carries the real destination RTT; ICMP results only attribute the hop
+        const i = results.findIndex(x => x.ttl === at), fr = { ip: t.ip || t.host, ms: hit.r.ms, final: true };
+        if (i >= 0) results[i].r = { ...results[i].r, ...fr }; else results.push({ ttl: at, r: fr });
+      }
+    }
   }
   const now = Date.now();
   let fin = t.finalTtl;
@@ -467,7 +538,7 @@ function mos(avg, jitter, loss) { // E-model approximation
 }
 function view(t, focusMs, rng) {
   return { id: t.id, host: t.host, ip: t.ip, name: t.name, running: !!t.running, count: t.count || 0, finalTtl: t.finalTtl || null, startedAt: t.startedAt,
-    agent: t.agent ? { url: t.agent.url, error: t.agentError || null } : null, proto: t.proto || 'icmp', port: t.port || null, configId: t.configId || null, adhoc: !!t.adhoc, followIp: !!t.followIp, routeChanges: Math.max(0, (t.routes || []).length - 1), comments: (t.comments || []).length, customCols: t.customCols || {},
+    agent: t.agent ? { url: t.agent.url, error: t.agentError || null } : null, proto: t.proto || 'icmp', port: t.port || null, destState: t.destState || null, configId: t.configId || null, adhoc: !!t.adhoc, followIp: !!t.followIp, routeChanges: Math.max(0, (t.routes || []).length - 1), comments: (t.comments || []).length, customCols: t.customCols || {},
     hops: t.hops.map(h => {
       let st = rng ? statsRange(t, h, rng.from, rng.to) : stats(h, focusMs);
       if (!rng && db && focusMs && h.samples.length && h.samples[0].t > Date.now() - focusMs + 5000) { // focus window longer than what memory holds: use the history DB
@@ -540,6 +611,21 @@ function checkAlerts(t) {
 
 // ---- export ----
 function exportText(t, fmt, focusMs, all) {
+  if (fmt === 'json') { // structured results with destination, probe method, timestamp and configuration (spec §11)
+    const cfg = cfgOf(t);
+    const o = {
+      app: 'PingTracer', version: APP_VERSION, exported: new Date().toISOString(),
+      target: { host: t.host, ip: t.ip || null, name: t.name || t.host, proto: t.proto || 'icmp', port: t.port || null,
+        destState: t.destState || null, startedAt: t.startedAt ? new Date(t.startedAt).toISOString() : null, rounds: t.count || 0, finalTtl: t.finalTtl || null },
+      config: { intervalMs: cfg.intervalMs, timeoutMs: cfg.timeoutMs, packetSize: cfg.packetSize, maxHops: cfg.maxHops },
+      hops: t.hops.map(h => { const s = stats(h, focusMs);
+        const o = { ttl: h.ttl, ip: h.ip || null, name: settings.hostNames[h.ip] || h.name || null,
+          stats: { count: s.count, lost: s.lost, lossPct: +s.lossPct.toFixed(2), avgMs: s.avg, minMs: s.min, maxMs: s.max, curMs: s.cur, jitterMs: s.jitter, mos: s.mos } };
+        if (all) o.samples = h.samples.map(x => ({ t: new Date(x.t).toISOString(), ms: x.ms }));
+        return o; })
+    };
+    return JSON.stringify(o, null, 2);
+  }
   const sep = fmt === 'csv' ? ',' : '\t';
   const hops = t.hops;
   if (!all) {
@@ -605,6 +691,10 @@ const lookupIp = host => new Promise(r => {
   dns.lookup(host, { family: fam, verbatim: false }, (e, a) => r(e ? null : a));
 });
 const validHost =h => /^[a-zA-Z0-9]([a-zA-Z0-9.\-_]{0,251}[a-zA-Z0-9])?$/.test(h || '') || /^[0-9a-fA-F:]+$/.test(h || '');
+// ports arrive from the UI/CLI: reject anything that isn't a whole number in 1-65535 with a clean 400 instead of
+// silently coercing it (spec §12). null/'' means "no port given" (ICMP, or the protocol default); undefined means invalid.
+const portOf = v => { if (v == null || v === '') return null; const n = +v; return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : undefined; };
+const PORT_ERR = 'invalid port: enter a whole number between 1 and 65535';
 
 // ---- Wi-Fi monitoring (netsh wlan; English-locale output) ----
 const kv = text => text.split(/\r?\n/).map(l => /^\s*([^:]+?)\s+:\s(.*)$/.exec(l)).filter(Boolean).map(m => [m[1].trim(), m[2].trim()]);
@@ -1012,7 +1102,8 @@ async function applyWeb() {
 const lanIps = () => Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
 
 const handle = async (req, res, remote = false) => {
-  const u = new URL(req.url, 'http://x'); const p = u.pathname; const m = req.method;
+  let u; try { u = new URL(req.url, 'http://x'); } catch { return send(res, 400, { error: 'bad request' }); } // a malformed request line must answer, not crash the process
+  const p = u.pathname; const m = req.method;
   const focus = +u.searchParams.get('focus') || 0;
   // Access control. Local mode: only same-origin requests to a loopback Host (blocks CSRF and DNS rebinding
   // from web pages, since alert rules can launch programs). Agent mode: shared-token auth on /api.
@@ -1109,12 +1200,14 @@ const handle = async (req, res, remote = false) => {
         if (targets.length >= MAX_TARGETS) return send(res, 400, { error: 'limit of ' + MAX_TARGETS + ' open targets reached' });
         if (AGENT) return send(res, 400, { error: 'agents cannot chain to other agents' });
         if (!/^https?:\/\/[^\s/]+/i.test(b.agent.url)) return send(res, 400, { error: 'invalid agent URL' });
-        const t = { id: nextId++, host, ip: host, name: b.name || host, hops: [], count: 0, running: false, hidden: [], proto: ['tcp', 'udp'].includes(b.proto) ? b.proto : 'icmp', port: Math.max(1, Math.min(65535, +b.port || 0)) || null, agent: { url: String(b.agent.url), token: String(b.agent.token || '') } };
+        const port = portOf(b.port); if (port === undefined) return send(res, 400, { error: PORT_ERR });
+        const t = { id: nextId++, host, ip: host, name: b.name || host, hops: [], count: 0, running: false, hidden: [], proto: ['tcp', 'udp'].includes(b.proto) ? b.proto : 'icmp', port, agent: { url: String(b.agent.url), token: String(b.agent.token || '') } };
         targets.push(t); start(t); save(); return send(res, 200, view(t, focus));
       }
+      const port = portOf(b.port); if (port === undefined) return send(res, 400, { error: PORT_ERR }); // validate before any network work
       const ip = await lookupIp(host);
       if (!ip) return send(res, 400, { error: 'DNS lookup failed for ' + host });
-      const t = { id: nextId++, host, ip, name: b.name || host, hops: [], count: 0, running: false, hidden: [], proto: ['tcp', 'udp'].includes(b.proto) ? b.proto : 'icmp', port: Math.max(1, Math.min(65535, +b.port || 0)) || null,
+      const t = { id: nextId++, host, ip, name: b.name || host, hops: [], count: 0, running: false, hidden: [], proto: ['tcp', 'udp'].includes(b.proto) ? b.proto : 'icmp', port,
         adhoc: !!b.adhoc, followIp: b.followIp !== false && !require('net').isIP(host), configId: (b.configId && (settings.configs || []).some(c => c.id === b.configId)) ? String(b.configId) : null };
       const smJ = b.summaryId && (settings.summaries || []).find(x => x.id === b.summaryId); // start the target straight into a summary
       if (smJ) { if (!t.configId && smJ.configId) t.configId = smJ.configId; smJ.members.push({ tid: t.id, ttl: null }); }
@@ -1162,15 +1255,16 @@ const handle = async (req, res, remote = false) => {
         save(); return send(res, 200, { ok: true, customCols: t.customCols });
       }
       if (act === 'reresolve' && m === 'POST') { const b = await readBody(req); await checkIpChanges(t); for (const h of t.hops) { if (b.hop && +b.hop !== h.ttl) continue; if (!h.ip) continue; nameCache.delete(h.ip); h.name = await rdns(h.ip); } return send(res, 200, { ok: true }); }
-      if (act === 'reset' && m === 'POST') { const was = t.running; stop(t); t.epoch = (t.epoch || 0) + 1; t.hops = []; t.finalTtl = null; t.count = 0; t.routes = []; dbDelete(t.id); if (was) start(t); return send(res, 200, { ok: true }); }
+      if (act === 'reset' && m === 'POST') { const was = t.running; stop(t); t.epoch = (t.epoch || 0) + 1; t.hops = []; t.finalTtl = null; t.count = 0; t.routes = []; t.destState = null; dbDelete(t.id); if (was) start(t); return send(res, 200, { ok: true }); }
       if (act === 'rename' && m === 'POST') { const b = await readBody(req), name = String(b.name || '').trim().slice(0, 100); if (b.hop) { const h = t.hops.find(x => x.ttl === +b.hop); if (h && h.ip) { if (name) settings.hostNames[h.ip] = name; else delete settings.hostNames[h.ip]; } } else if (name) t.name = name; save(); return send(res, 200, { ok: true }); }
       if (act === 'update' && m === 'POST') { const b = await readBody(req);
         if (b.configId !== undefined) t.configId = (b.configId && b.configId !== 'default' && (settings.configs || []).some(c => c.id === b.configId)) ? b.configId : null;
-        if (b.proto) { t.proto = ['tcp', 'udp'].includes(b.proto) ? b.proto : 'icmp'; t.finalTtl = t.agent ? t.finalTtl : t.finalTtl; } if (b.port) t.port = Math.max(1, Math.min(65535, +b.port));
+        if (b.proto) { t.proto = ['tcp', 'udp'].includes(b.proto) ? b.proto : 'icmp'; t.finalTtl = t.agent ? t.finalTtl : t.finalTtl; }
+        if (b.port != null && b.port !== '') { const pt = portOf(b.port); if (pt === undefined) return send(res, 400, { error: PORT_ERR }); t.port = pt; }
         if (b.name) t.name = String(b.name).slice(0, 100);
         if (b.persistence) t.adhoc = b.persistence === 'adhoc'; if (b.followIp != null) t.followIp = !!b.followIp && !require('net').isIP(t.host);
         save(); return send(res, 200, view(t, focus)); }
-      if (act === 'retrace') { t.finalTtl = null; t.hops = []; t.epoch = (t.epoch || 0) + 1; if (t.agent) t.agent.since = 0; return send(res, 200, { ok: true }); }
+      if (act === 'retrace') { t.finalTtl = null; t.hops = []; t.epoch = (t.epoch || 0) + 1; t.destState = null; if (t.agent) t.agent.since = 0; return send(res, 200, { ok: true }); }
       if (act === 'hide' && m === 'POST') { const b = await readBody(req); t.hidden = b.hidden || []; return send(res, 200, { ok: true }); }
       if (act === 'samples') {
         const ttl = +u.searchParams.get('hop') || t.finalTtl || (t.hops.length ? t.hops[t.hops.length - 1].ttl : 1);
@@ -1192,8 +1286,9 @@ const handle = async (req, res, remote = false) => {
         return send(res, 200, exportRange(t, from, to, u.searchParams.get('mode') === 'periods' ? 'periods' : 'samples', +u.searchParams.get('period'), u.searchParams.get('format') === 'tsv' ? '\t' : ','), 'text/plain');
       }
       if (act === 'export') {
-        const txt = exportText(t, u.searchParams.get('format') || 'long', focus, u.searchParams.get('all') === '1');
-        return send(res, 200, txt, 'text/plain');
+        const fmt = u.searchParams.get('format') || 'long';
+        const txt = exportText(t, fmt, focus, u.searchParams.get('all') === '1');
+        return send(res, 200, txt, fmt === 'json' ? 'application/json' : 'text/plain');
       }
     }
     if (p === '/api/settings') {
@@ -1218,17 +1313,14 @@ const handle = async (req, res, remote = false) => {
           pass, passEnc, from: String(b.smtp.from || '').slice(0, 253), to: String(b.smtp.to || '').slice(0, 500) };
       }
       if (b.trayAlerts != null) settings.trayAlerts = !!b.trayAlerts;
-      if (b.intervalMs) settings.intervalMs = Math.max(250, Math.min(3600000, +b.intervalMs));
-      if (b.packetSize != null) settings.packetSize = Math.max(0, Math.min(1400, +b.packetSize));
-      if (b.maxHops) settings.maxHops = Math.max(1, Math.min(64, +b.maxHops));
+      // accept only parseable numbers (an empty form field leaves the current value alone); clampSettings bounds them
+      for (const k of Object.keys(NUM_RANGE)) { const n = toNum(b[k]); if (b[k] != null && b[k] !== '' && Number.isFinite(n)) settings[k] = n; }
       if (b.startWithWindows != null && !remote) { const want = !!b.startWithWindows; if (asNow !== want) { startError = await setAutostart(want); if (!startError) asNow = want; } }
       if (['auto', '4', '6'].includes(String(b.ipVersion))) settings.ipVersion = String(b.ipVersion);
       if (b.openMode === 'app' || b.openMode === 'browser') settings.openMode = b.openMode;
-      if (b.historyDays) settings.historyDays = Math.max(1, Math.min(3650, +b.historyDays));
-      if (b.maxSamples) settings.maxSamples = Math.max(100, Math.min(200000, +b.maxSamples));
-      if (b.timeoutMs) settings.timeoutMs = Math.max(200, Math.min(10000, +b.timeoutMs));
       if (Array.isArray(b.alertRules)) settings.alertRules = sanitizeRules(b.alertRules);
       if (b.hostNames) settings.hostNames = sanitizeNames(b.hostNames);
+      clampSettings(); // re-apply every range before persisting, so no path can save an out-of-range setting
       save(); return send(res, 200, pub2());
     }
     if (p === '/api/alerts') return send(res, 200, alertLog.slice(-200));
@@ -1283,6 +1375,7 @@ const handle = async (req, res, remote = false) => {
       if (m === 'GET') return send(res, 200, [{ id: 'default', name: 'Default', intervalMs: settings.intervalMs, timeoutMs: settings.timeoutMs, packetSize: settings.packetSize, maxHops: settings.maxHops, keepDays: settings.historyDays, builtin: true }, ...settings.configs]);
       const b = await readBody(req); const src = b.copyOf && (b.copyOf === 'default' ? { intervalMs: settings.intervalMs, timeoutMs: settings.timeoutMs, packetSize: settings.packetSize, maxHops: settings.maxHops, keepDays: settings.historyDays } : settings.configs.find(c => c.id === b.copyOf)) || {};
       const c = { id: newId(), name: String(b.name || (src.name ? src.name + ' copy' : 'New configuration')).slice(0, 60), intervalMs: +b.intervalMs || src.intervalMs || settings.intervalMs, timeoutMs: +b.timeoutMs || src.timeoutMs || settings.timeoutMs, packetSize: b.packetSize != null ? +b.packetSize : (src.packetSize ?? settings.packetSize), maxHops: +b.maxHops || src.maxHops || settings.maxHops, keepDays: +b.keepDays || src.keepDays || settings.historyDays };
+      clampCfg(c); // same ranges as Settings (spec §12)
       settings.configs.push(c); save(); return send(res, 200, c);
     }
     let mc = p.match(/^\/api\/configs\/([\w]+)(?:\/(move))?$/);
@@ -1293,11 +1386,12 @@ const handle = async (req, res, remote = false) => {
       if (mc[2] === 'move' && m === 'POST') { const b = await readBody(req), j = i + (b.dir === 'up' ? -1 : 1); if (j >= 0 && j < settings.configs.length) { const [c] = settings.configs.splice(i, 1); settings.configs.splice(j, 0, c); } save(); return send(res, 200, { ok: true }); }
       if (m === 'DELETE') { settings.configs.splice(i, 1); targets.forEach(t => { if (t.configId === mc[1]) t.configId = null; }); for (const sm of settings.summaries || []) if (sm.configId === mc[1]) sm.configId = null; save(); return send(res, 200, { ok: true }); }
       if (m === 'PUT' || m === 'POST') { const b = await readBody(req), c = settings.configs[i];
-        if (b.name != null) c.name = String(b.name).slice(0, 60); if (b.intervalMs) c.intervalMs = Math.max(250, +b.intervalMs); if (b.timeoutMs) c.timeoutMs = Math.max(200, Math.min(10000, +b.timeoutMs));
-        if (b.packetSize != null) c.packetSize = Math.max(0, Math.min(1400, +b.packetSize)); if (b.maxHops) c.maxHops = Math.max(1, Math.min(64, +b.maxHops)); if (b.keepDays) c.keepDays = Math.max(1, Math.min(3650, +b.keepDays));
+        if (b.name != null) c.name = String(b.name).slice(0, 60); if (b.intervalMs) c.intervalMs = b.intervalMs; if (b.timeoutMs) c.timeoutMs = b.timeoutMs;
+        if (b.packetSize != null) c.packetSize = b.packetSize; if (b.maxHops) c.maxHops = b.maxHops; if (b.keepDays) c.keepDays = b.keepDays;
+        clampCfg(c); // one range table for every numeric override (spec §12)
         save(); return send(res, 200, c); }
     }
-    if (p === '/api/packettypes') return send(res, 200, [{ id: 'icmp', name: 'ICMP Echo', port: false, available: true }, { id: 'tcp', name: 'TCP connect (destination)', port: true, available: helperReady }, { id: 'udp', name: 'UDP datagram (destination)', port: true, available: helperReady }]);
+    if (p === '/api/packettypes') return send(res, 200, [{ id: 'icmp', name: 'ICMP Echo', port: false, available: true }, { id: 'tcp', name: 'TCP route trace (TTL-limited)', port: true, available: helperReady }, { id: 'udp', name: 'UDP route trace (TTL-limited)', port: true, available: helperReady }]);
     if (p === '/api/interfaces') return send(res, 200, Object.entries(os.networkInterfaces()).map(([name, a]) => ({ name, addresses: (a || []).map(x => ({ address: x.address, family: x.family, internal: x.internal, mac: x.mac })) })));
     // ---- summaries (named groups of targets / hops; "All Targets" is the Overview) ----
     if (p === '/api/summaries') {
@@ -1369,7 +1463,7 @@ const handle = async (req, res, remote = false) => {
       const win = +u.searchParams.get('window') || 3600000;
       return send(res, 200, { supported: WIN, enabled: !!wifi.timer, error: wifi.error, current: wifi.current, history: wifi.history.filter(h => h.t >= Date.now() - win), neighbors: wifi.neighbors });
     }
-    if (p === '/api/info') return send(res, 200, { engine: helperReady ? 'helper' : 'ping.exe', platform: os.platform(), version: '1.0.0', data: DATA_DIR, tray: !!tray, agent: AGENT });
+    if (p === '/api/info') return send(res, 200, { engine: helperReady ? 'helper' : 'ping.exe', platform: os.platform(), version: APP_VERSION, data: DATA_DIR, tray: !!tray, agent: AGENT });
     if (p === '/api/dashboard') return send(res, 200, targets.map(t => { const h = t.hops[t.hops.length - 1]; return { id: t.id, host: t.host, running: !!t.running, hops: t.hops.length, final: h ? stats(h, focus) : null }; }));
     // static (embedded in the exe, or ./public in dev)
     const name = p === '/' ? 'index.html' : p.replace(/^\/+/, '');
@@ -1381,7 +1475,7 @@ const handle = async (req, res, remote = false) => {
 http.createServer((q, s) => handle(q, s, false)).listen(PORT, AGENT ? '0.0.0.0' : '127.0.0.1', () => {
   console.log(AGENT ? `PingTracer AGENT listening on 0.0.0.0:${PORT}\n  Agent token: ${AGENT_TOKEN}\n  (add this machine from a controller with URL http://<this-ip>:${PORT} and the token; traffic is plain HTTP, use a trusted network)`
                     : `PingTracer running at http://127.0.0.1:${PORT}`);
-  startHelper(); startTray(); loadExtensions(); openDb(); load(); migrateSecrets(); applyWeb(); if (settings.wifiMonitor && !AGENT) wifiStart();
+  startHelper(); startTray(); try { loadExtensions(); } catch (e) { extensions.length = 0; console.error('extensions unavailable:', e.message); } openDb(); load(); migrateSecrets(); applyWeb(); if (settings.wifiMonitor && !AGENT) wifiStart(); // an unreadable extensions folder must not stop startup (spec §12)
   if (OPEN) openUi();
 }).on('error', e => { if (e.code === 'EADDRINUSE') { if (OPEN) { openUi(() => process.exit(0)); setTimeout(() => process.exit(0), 3000); } else { console.error('Port in use'); process.exit(1); } } });
 process.on('exit', () => { try { helper && helper.kill(); tray && tray.kill(); } catch {} });

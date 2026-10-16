@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Threading.Tasks;
 using System.Security.Cryptography;
 
@@ -39,14 +40,17 @@ static class PPHelper
                 Mail(o, p);
                 continue;
             }
-            if (p.Length >= 5 && (p[0] == "T" || p[0] == "U"))
-            { // T|U id host port timeoutMs [size]  -> "id ok|timeout|err ip ms"
-                int pt, to, sz = 32;
-                if (int.TryParse(p[3], out pt) && int.TryParse(p[4], out to))
+            if (p.Length >= 6 && (p[0] == "T" || p[0] == "U"))
+            { // T|U id host port timeoutMs ttl [size]  -> "id ok|refused|timeout|unreach|err ip ms"
+              // TTL-limited probes: the protocol itself discovers the path length (ttl counts up until the destination answers).
+              // Windows user-mode sockets cannot report which router sent an ICMP Time Exceeded, so intermediate hop addresses
+              // come from the engine's ICMP probes; the protocol probe proves reachability at each TTL.
+                int pt, to, ttl, sz = 32;
+                if (int.TryParse(p[3], out pt) && int.TryParse(p[4], out to) && int.TryParse(p[5], out ttl))
                 {
-                    if (p.Length > 5) int.TryParse(p[5], out sz);
+                    if (p.Length > 6) int.TryParse(p[6], out sz);
                     System.Threading.Interlocked.Increment(ref pending);
-                    if (p[0] == "T") ProbeTcp(o, p[1], p[2], pt, to); else ProbeUdp(o, p[1], p[2], pt, to, sz);
+                    if (p[0] == "T") ProbeTcp(o, p[1], p[2], pt, to, ttl); else ProbeUdp(o, p[1], p[2], pt, to, ttl, sz);
                 }
                 continue;
             }
@@ -86,56 +90,84 @@ static class PPHelper
         lock (Gate) o.WriteLine(id + " " + st + " " + ip + " " + ms.ToString(System.Globalization.CultureInfo.InvariantCulture));
         System.Threading.Interlocked.Decrement(ref pending);
     }
-    // TCP "ping": a completed handshake OR a refusal (RST) both prove the host answered; timeout = loss.
-    static async void ProbeTcp(StreamWriter o, string id, string host, int port, int timeout)
+    static void SetTtl(Socket s, AddressFamily fam, int ttl)
+    { // per-probe TTL: IPv4 IP_TTL (SocketOptionName.IpTimeToLive = 4), IPv6 unicast hop limit
+      // (SocketOptionName.HopLimit = 21; kept as a numeric cast so it compiles against every reference
+      // assembly - 27 is IPv6Only, not the hop limit). Options are set before connect/send; a failure
+      // is swallowed so the probe still runs with the default TTL rather than reporting an error.
+        if (ttl <= 0) return;
+        try
+        {
+            if (fam == AddressFamily.InterNetwork) s.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.IpTimeToLive, ttl);
+            else if (fam == AddressFamily.InterNetworkV6) s.SetSocketOption(SocketOptionLevel.IPv6, (SocketOptionName)21, ttl);
+        }
+        catch (Exception) { }
+    }
+    // TTL-limited TCP probe: a completed handshake (ok) or a refusal (refused, RST) both prove the destination
+    // is reachable within that TTL; timeout = TTL expired en route, filtered port, or no response.
+    static async void ProbeTcp(StreamWriter o, string id, string host, int port, int timeout, int ttl)
     {
         var sw = Stopwatch.StartNew();
         try
         {
-            using (var c = new System.Net.Sockets.TcpClient())
+            var addrs = Dns.GetHostAddresses(host);
+            if (addrs.Length == 0) { Reply(o, id, "err", "-", 0); return; }
+            var addr = Array.Find(addrs, a => a.AddressFamily == AddressFamily.InterNetwork) ?? addrs[0];
+            using (var s = new Socket(addr.AddressFamily, SocketType.Stream, ProtocolType.Tcp))
             {
-                var t = c.ConnectAsync(host, port);
+                SetTtl(s, addr.AddressFamily, ttl);
+                var rem = new IPEndPoint(addr, port);
+                var t = TaskFactory.FromAsync((cb, st) => s.BeginConnect(rem, cb, st), s.EndConnect, null);
                 var done = await Task.WhenAny(t, Task.Delay(timeout));
                 sw.Stop();
-                if (done != t) { Reply(o, id, "timeout", "-", 0); return; }
+                double ms = Math.Max(0.1, Math.Round(sw.Elapsed.TotalMilliseconds, 1));
+                if (done != t) { try { s.Close(); } catch { } Reply(o, id, "timeout", "-", 0); return; }
                 if (t.IsFaulted)
                 {
-                    var se = t.Exception.GetBaseException() as System.Net.Sockets.SocketException;
-                    if (se != null && se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused) { Reply(o, id, "ok", host, Math.Max(0.1, Math.Round(sw.Elapsed.TotalMilliseconds, 1))); return; }
+                    var se = t.Exception.GetBaseException() as SocketException;
+                    if (se != null && se.SocketErrorCode == SocketError.ConnectionRefused) { Reply(o, id, "refused", addr.ToString(), ms); return; }
+                    if (se != null && (se.SocketErrorCode == SocketError.NetworkUnreachable || se.SocketErrorCode == SocketError.HostUnreachable)) { Reply(o, id, "unreach", "-", 0); return; }
                     Reply(o, id, "timeout", "-", 0); return;
                 }
-                Reply(o, id, "ok", host, Math.Max(0.1, Math.Round(sw.Elapsed.TotalMilliseconds, 1)));
+                Reply(o, id, "ok", addr.ToString(), ms);
             }
         }
         catch (Exception) { Reply(o, id, "err", "-", 0); }
     }
-    // UDP probe: a datagram reply, or the ICMP port-unreachable Windows surfaces as ConnectionReset, proves the host is up.
-    static async void ProbeUdp(StreamWriter o, string id, string host, int port, int timeout, int size)
+    // TTL-limited UDP probe: a datagram reply (ok) or the ICMP Port Unreachable that Windows surfaces as
+    // ConnectionReset (refused) both prove the destination is reachable within that TTL. No reply is never
+    // proof of an offline destination - UDP probes are commonly firewalled.
+    static async void ProbeUdp(StreamWriter o, string id, string host, int port, int timeout, int ttl, int size)
     {
         var sw = Stopwatch.StartNew();
         try
         {
-            using (var u = new System.Net.Sockets.UdpClient())
+            var addrs = Dns.GetHostAddresses(host);
+            if (addrs.Length == 0) { Reply(o, id, "err", "-", 0); return; }
+            var addr = Array.Find(addrs, a => a.AddressFamily == AddressFamily.InterNetwork) ?? addrs[0];
+            using (var u = new UdpClient(addr.AddressFamily))
             {
-                u.Connect(host, port);
+                SetTtl(u.Client, addr.AddressFamily, ttl);
+                u.Connect(addr, port);
                 var buf = new byte[Math.Max(1, Math.Min(size, 1400))];
                 await u.SendAsync(buf, buf.Length);
                 var r = u.ReceiveAsync();
                 var done = await Task.WhenAny(r, Task.Delay(timeout));
                 sw.Stop();
+                double ms = Math.Max(0.1, Math.Round(sw.Elapsed.TotalMilliseconds, 1));
                 if (done != r) { Reply(o, id, "timeout", "-", 0); return; }
                 if (r.IsFaulted)
                 {
-                    var se = r.Exception.GetBaseException() as System.Net.Sockets.SocketException;
-                    if (se != null && se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionReset) { Reply(o, id, "ok", host, Math.Max(0.1, Math.Round(sw.Elapsed.TotalMilliseconds, 1))); return; }
+                    var se = r.Exception.GetBaseException() as SocketException;
+                    if (se != null && se.SocketErrorCode == SocketError.ConnectionReset) { Reply(o, id, "refused", addr.ToString(), ms); return; }
                     Reply(o, id, "timeout", "-", 0); return;
                 }
-                Reply(o, id, "ok", host, Math.Max(0.1, Math.Round(sw.Elapsed.TotalMilliseconds, 1)));
+                Reply(o, id, "ok", addr.ToString(), ms);
             }
         }
-        catch (System.Net.Sockets.SocketException se)
+        catch (SocketException se)
         {
-            if (se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionReset) Reply(o, id, "ok", host, Math.Max(0.1, Math.Round(sw.Elapsed.TotalMilliseconds, 1)));
+            if (se.SocketErrorCode == SocketError.ConnectionReset) Reply(o, id, "refused", host, 0.1);
             else Reply(o, id, "err", "-", 0);
         }
         catch (Exception) { Reply(o, id, "err", "-", 0); }
