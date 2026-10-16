@@ -85,7 +85,8 @@ test('UDP target: path length discovered via port-unreachable; steady state prob
     if (stderr) console.error('server stderr:\n' + stderr);
     throw e;
   } finally {
-    srv.kill();
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    // Windows keeps history.db locked until the server process is really gone - wait for exit, then retry the delete.
+    await new Promise(r => { srv.once('exit', r); srv.kill(); setTimeout(r, 5000); });
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });

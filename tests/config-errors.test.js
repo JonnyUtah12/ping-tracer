@@ -9,9 +9,11 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const SERVER = path.join(__dirname, '..', 'app', 'server.js');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pt9-config-'));
 const procs = [];
-after(() => {
-  for (const p of procs) { try { p.kill(); } catch {} }
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
+after(async () => {
+  // Windows locks open files (history.db) until the process exits - wait for exit before deleting.
+  const exits = procs.filter(p => p.exitCode == null).map(p => new Promise(r => { p.once('exit', r); p.kill(); setTimeout(r, 5000); }));
+  await Promise.all(exits);
+  try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }); } catch {}
 });
 
 const freePort = () => new Promise(r => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
