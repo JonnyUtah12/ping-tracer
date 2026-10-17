@@ -30,9 +30,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # the job never pushes via git (the release step uses the gh CLI with
+          # GH_TOKEN), so keep the token out of the runner's git config
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
@@ -113,8 +117,12 @@ jobs:
           "- artifact: ``app/dist/PingTracer.exe``" | Add-Content $env:GITHUB_STEP_SUMMARY
           "- sha256: ``$sha``" | Add-Content $env:GITHUB_STEP_SUMMARY
           if (-not (Test-Path $mp)) {
-            "::warning::MpCmdRun.exe not found on this runner - Defender scan skipped"
             "- **result: scanner not present on runner, scan skipped**" | Add-Content $env:GITHUB_STEP_SUMMARY
+            if ($env:GITHUB_REF -like 'refs/tags/v*') {
+              Write-Host "::error::MpCmdRun.exe not found on this runner - refusing to publish an unscanned release ($env:GITHUB_REF)"
+              exit 1
+            }
+            "::warning::MpCmdRun.exe not found on this runner - Defender scan skipped (not a release build)"
             exit 0
           }
           & $mp -SignatureUpdate *> $null   # best effort; stale defs still scan
@@ -166,8 +174,8 @@ jobs:
       # AZURE_CLIENT_ID / AZURE_CLIENT_SECRET. Skipped entirely when
       # unconfigured. Runs before the zip so the shipped exe is the signed one.
       - name: code sign PingTracer.exe (only when signing is configured)
-        if: vars.TRUSTED_SIGNING_ACCOUNT_NAME != ''
-        uses: Azure/artifact-signing-action@v2
+        if: github.event_name != 'pull_request' && vars.TRUSTED_SIGNING_ACCOUNT_NAME != ''
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT_NAME }}
@@ -247,7 +255,7 @@ jobs:
           cat SHA256SUMS.txt
           ls -l "$ZIP"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: PingTracer-windows-x64-portable
           path: |
@@ -286,5 +294,12 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "$ZIP" SHA256SUMS.txt CHANGELOG.md \
             --title "PingTracer $GITHUB_REF_NAME (Windows portable)" \
             --notes-file notes.md
-          echo "release assets:"
+          # second scan: fetch the published zip back and re-verify its hash
+          # against the released SHA256SUMS.txt, so a corrupted or swapped
+          # asset cannot pass unnoticed.
+          rm -rf verify && mkdir verify && cd verify
+          gh release download "$GITHUB_REF_NAME" --pattern "$ZIP" --pattern SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          cd ..
+          echo "release assets (published):"
           gh release view "$GITHUB_REF_NAME"

@@ -14,7 +14,7 @@ const argv = process.argv.slice(2), argOf = k => (argv.find(a => a.startsWith(k 
 const AGENT = argv.includes('--agent'); // remote-agent mode: listens on the network, token-protected
 const AGENT_TOKEN = argOf('--token') || process.env.PP_TOKEN || require('crypto').randomBytes(12).toString('hex');
 const PORT = +argOf('--port') || +process.env.PORT || (AGENT ? 8766 : 8765);
-const APP_VERSION = '1.1.1'; // keep in sync with git tags and CHANGELOG.md
+const APP_VERSION = '1.1.2'; // keep in sync with git tags and CHANGELOG.md
 
 // ---- command-line automation: "PingTracer.exe cli <command> ..." drives a running instance through its local API ----
 if (argv[0] === 'cli') {

@@ -4,6 +4,40 @@ All notable changes to PingTracer are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-10-16
+
+Security-audit follow-up: CI/supply-chain hardening plus the published audit
+report. The application itself is unchanged from 1.1.1.
+
+### Added
+- `SECURITY_AUDIT.md` — the full 2026-10-16 audit: reconnaissance, CVE
+  analysis of the embedded Node runtime and build toolchain, source findings
+  with confirmed / false-positive / needs-investigation classification,
+  remediation log, verification evidence, and open follow-ups.
+
+### Changed
+- CI supply-chain hardening: every GitHub Action is now pinned to a full
+  commit SHA with a version comment (`actions/checkout` v4.4.0,
+  `actions/setup-node` v4.4.0, `actions/upload-artifact` v4.6.2,
+  `Azure/artifact-signing-action` v2.0.0) instead of mutable major tags.
+- `.github/dependabot.yml` added so those pins update through reviewable
+  weekly PRs rather than a tag moving under the pipeline.
+- `actions/checkout` no longer persists the job token into the runner's git
+  config (`persist-credentials: false`); nothing in the job pushes via git.
+- The optional Azure signing step is skipped on `pull_request` runs (the
+  repo-variable gate it used was visible to fork PRs, where it would run
+  with empty credentials and fail the build).
+
+### Fixed
+- The Defender release gate no longer degrades silently: on a `v*` tag a
+  missing `MpCmdRun.exe` now fails the job instead of publishing an
+  unscanned artifact. Non-release builds still skip with a warning.
+
+### Security
+- After publishing, the release step downloads the released zip back and
+  re-verifies it against the released `SHA256SUMS.txt`, so a corrupted or
+  swapped asset fails the job instead of going unnoticed.
+
 ## [1.1.1] - 2026-10-16
 
 ### Changed
